@@ -1,0 +1,63 @@
+import type { I18nObject } from './common'
+
+export type CultureTag = 'Guangfu' | 'Chaoshan' | 'Hakka' | 'Coastal' | 'BayArea' | 'Mountain'
+
+export interface RouteStop {
+  id?: string
+  sortOrder: number
+  time: string
+  stopName: any
+  story: any
+  culturalStory: any
+  details?: any[]
+  image: string
+  lat?: number
+  lng?: number
+  meal?: any
+  hotel?: any
+  transit?: any
+}
+
+export interface Route {
+  id: string
+  slug: string
+  title: any
+  titleEn?: string
+  cultureTag: string
+  cityName: any
+  cityNameEn?: string
+  duration: any
+  durationEn?: string
+  audience: any
+  audienceEn?: string
+  summary: any
+  summaryEn?: string
+  story: any
+  storyEn?: string
+  coverImage: string
+  stops?: RouteStop[]
+  stopCount?: number
+  published: boolean
+  citySlugs?: string[]
+  price?: number
+  createdAt?: string
+  updatedAt?: string
+  deletedAt?: string | null
+}
+
+export interface RouteFormData {
+  id?: string
+  slug: string
+  title: I18nObject
+  cultureTag: string
+  cityName: I18nObject
+  duration: I18nObject
+  audience: I18nObject
+  summary: I18nObject
+  story: I18nObject
+  coverImage: string
+  stops: RouteStop[]
+  published?: boolean
+  citySlugs?: string[]
+  price?: number
+}
