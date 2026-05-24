@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { ref, reactive } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/store/auth'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { UserFilled, Lock } from '@element-plus/icons-vue'
 
 const router = useRouter()
+const route = useRoute()
 const authStore = useAuthStore()
 
 const formRef = ref<FormInstance>()
@@ -30,9 +31,11 @@ async function handleLogin() {
   try {
     await authStore.login(form.email, form.password)
     ElMessage.success('登录成功')
-    router.push('/admin/dashboard')
-  } catch {
-    ElMessage.error('登录失败，请检查用户名和密码')
+    // 登录后跳回原页面或默认 dashboard
+    const redirect = (route.query.redirect as string) || '/admin/dashboard'
+    router.push(redirect)
+  } catch (err: any) {
+    ElMessage.error(err?.response?.data?.message || '登录失败,请检查邮箱和密码')
   } finally {
     loading.value = false
   }
@@ -99,10 +102,12 @@ async function handleLogin() {
   align-items: center;
   justify-content: center;
   background: linear-gradient(135deg, #1a2a6c, #304156, #2d4a68);
+  padding: 20px;
 }
 
 .login-card-wrapper {
-  width: 400px;
+  width: 100%;
+  max-width: 400px;
 }
 
 .login-header {
@@ -131,5 +136,11 @@ async function handleLogin() {
 
 .login-btn {
   width: 100%;
+}
+
+@media (max-width: 480px) {
+  .login-title {
+    font-size: 22px;
+  }
 }
 </style>

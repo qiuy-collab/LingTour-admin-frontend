@@ -1,30 +1,60 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search, Plus, Edit, Delete } from '@element-plus/icons-vue'
 import { citiesApi } from '@/api/cities'
 import type { City } from '@/types/city'
 import type { PaginatedResponse } from '@/types/common'
+import { pickI18n } from '@/types/common'
+import { resolveMediaUrl } from '@/utils/media'
 
 const router = useRouter()
 
-// ─── 列表数据 ──────────────────────────────
 const loading = ref(false)
 const list = ref<City[]>([])
 const total = ref(0)
-const pageParams = reactive({ page: 1, pageSize: 10, keyword: '' })
+const pageParams = reactive({ page: 1, pageSize: 10, keyword: '', status: '' })
 
-// ─── 获取列表 ──────────────────────────────
+function isReadableName(value: string) {
+  const text = value.trim()
+  if (!text) return false
+  if (text.includes('�')) return false
+  return /[\u4e00-\u9fffA-Za-z0-9]/.test(text)
+}
+
+function displayCityName(city: City, locale: 'zh' | 'en' = 'zh') {
+  return pickI18n(city.name, locale) || (locale === 'zh' ? city.slug : '')
+}
+
+async function hydrateBrokenNames(items: City[]) {
+  const brokenItems = items.filter((item) => !isReadableName(displayCityName(item)))
+  if (!brokenItems.length) return items
+
+  const detailMap = new Map<string, City>()
+  await Promise.all(
+    brokenItems.map(async (item) => {
+      try {
+        const res = await citiesApi.getCity(item.id)
+        detailMap.set(item.id, res.data.data)
+      } catch {
+        // Keep list payload as fallback if detail fetch fails.
+      }
+    }),
+  )
+
+  return items.map((item) => detailMap.get(item.id) || item)
+}
+
 async function fetchList() {
   loading.value = true
   try {
-    const res = await citiesApi.getCities(pageParams)
+    const res = await citiesApi.getCities(pageParams as any)
     const data: PaginatedResponse<City> = res.data.data
-    list.value = data.items
+    list.value = await hydrateBrokenNames(data.items || [])
     total.value = data.total
-  } catch {
-    ElMessage.error('获取城市列表失败')
+  } catch (err: any) {
+    ElMessage.error(err?.response?.data?.message || '获取城市列表失败')
   } finally {
     loading.value = false
   }
@@ -33,8 +63,8 @@ async function fetchList() {
 onMounted(fetchList)
 
 watch(
-  () => pageParams.page,
-  () => fetchList()
+  () => [pageParams.page, pageParams.pageSize],
+  () => fetchList(),
 )
 
 function handleSearch() {
@@ -42,7 +72,6 @@ function handleSearch() {
   fetchList()
 }
 
-// ─── 操作 ──────────────────────────────
 function handleCreate() {
   router.push('/admin/cities/create')
 }
@@ -52,16 +81,23 @@ function handleEdit(id: string) {
 }
 
 async function handleDelete(city: City) {
+  const cityName = displayCityName(city) || '该城市'
   try {
+    await ElMessageBox.confirm(
+      `确定删除城市“${cityName}”吗？该操作不可恢复。`,
+      '删除确认',
+      { type: 'warning' },
+    )
     await citiesApi.deleteCity(city.id)
-    ElMessage.success(`已删除城市「${city.name}」`)
+    ElMessage.success(`已删除城市“${cityName}”`)
     fetchList()
-  } catch {
-    ElMessage.error('删除失败')
+  } catch (err: any) {
+    if (err?.response) {
+      ElMessage.error(err.response.data?.message || '删除失败')
+    }
   }
 }
 
-// 地区标签颜色映射
 function regionColor(region: string) {
   const map: Record<string, string> = {
     'Pearl River Delta': '#409EFF',
@@ -74,7 +110,11 @@ function regionColor(region: string) {
 
 <template>
   <div class="cities-page">
-    <!-- 搜索栏 -->
+    <div class="page-header">
+      <h2>城市管理</h2>
+      <el-button type="primary" :icon="Plus" @click="handleCreate">新增城市</el-button>
+    </div>
+
     <div class="toolbar">
       <div class="toolbar-left">
         <el-input
@@ -86,82 +126,80 @@ function regionColor(region: string) {
           @keyup.enter="handleSearch"
           @clear="handleSearch"
         />
+        <el-select
+          v-model="pageParams.status"
+          placeholder="状态"
+          clearable
+          style="width: 120px"
+          @change="handleSearch"
+        >
+          <el-option label="全部" value="" />
+          <el-option label="已发布" value="published" />
+          <el-option label="草稿" value="draft" />
+        </el-select>
         <el-button type="primary" @click="handleSearch">搜索</el-button>
       </div>
-      <el-button type="primary" :icon="Plus" @click="handleCreate">
-        新增城市
-      </el-button>
     </div>
 
-    <!-- 列表表格 -->
-    <el-card shadow="never">
-      <el-table
-        v-loading="loading"
-        :data="list"
-        stripe
-        style="width: 100%"
-        row-key="id"
-      >
-        <el-table-column label="缩略图" width="80">
+    <el-card shadow="never" class="table-card">
+      <el-table v-loading="loading" :data="list" stripe style="width: 100%" row-key="id">
+        <el-table-column label="缩略图" width="92">
           <template #default="{ row }">
             <el-image
-              :src="row.heroImage"
+              :src="resolveMediaUrl(row.heroImage)"
               fit="cover"
-              style="width: 50px; height: 50px; border-radius: 4px"
-              :preview-src-list="[row.heroImage]"
+              style="width: 52px; height: 52px; border-radius: 6px; background: #f5f7fa"
+              :preview-src-list="resolveMediaUrl(row.heroImage) ? [resolveMediaUrl(row.heroImage)] : []"
               preview-teleported
-            />
+            >
+              <template #error>
+                <div class="image-fallback">加载失败</div>
+              </template>
+            </el-image>
           </template>
         </el-table-column>
 
-        <el-table-column prop="name" label="城市名" min-width="120">
+        <el-table-column label="城市名" min-width="180">
           <template #default="{ row }">
             <div>
-              <div class="city-name">{{ row.name }}</div>
-              <div class="city-name-en">{{ row.nameEn || '' }}</div>
+              <div class="city-name">{{ displayCityName(row) }}</div>
+              <div class="city-name-en">{{ displayCityName(row, 'en') || row.slug }}</div>
             </div>
           </template>
         </el-table-column>
 
-        <el-table-column prop="slug" label="Slug" width="120" />
+        <el-table-column prop="slug" label="Slug" width="140" />
 
         <el-table-column label="地区标签" width="160">
           <template #default="{ row }">
-            <el-tag
-              :color="regionColor(row.regionLabel || '')"
-              effect="dark"
-              size="small"
-            >
-              {{ row.regionLabel }}
+            <el-tag :color="regionColor(pickI18n(row.regionLabel) || '')" effect="dark" size="small">
+              {{ pickI18n(row.regionLabel) }}
             </el-tag>
           </template>
         </el-table-column>
 
-        <el-table-column label="标签" min-width="200">
+        <el-table-column label="标签" min-width="180">
           <template #default="{ row }">
             <el-tag
-              v-for="(tag, idx) in (row.tags || [])"
+              v-for="(tag, idx) in row.tags || []"
               :key="idx"
               size="small"
               style="margin: 2px"
             >
-              {{ tag }}
+              {{ pickI18n(tag) || tag }}
             </el-tag>
           </template>
         </el-table-column>
 
-        <el-table-column label="段落数" width="80" align="center">
+        <el-table-column label="段落数" width="90" align="center">
           <template #default="{ row }">
             {{ row.sections?.length || 0 }}
           </template>
         </el-table-column>
 
-        <el-table-column prop="status" label="状态" width="90">
+        <el-table-column label="状态" width="90">
           <template #default="{ row }">
-            <el-tag
-              :type="row.published ? 'success' : 'info'"
-              size="small"
-            >
+            <el-tag :type="row.published ? 'success' : 'info'" size="small">
               {{ row.published ? '已发布' : '草稿' }}
             </el-tag>
           </template>
@@ -169,32 +207,16 @@ function regionColor(region: string) {
 
         <el-table-column label="操作" width="180" fixed="right">
           <template #default="{ row }">
-            <el-button
-              type="primary"
-              link
-              :icon="Edit"
-              size="small"
-              @click="handleEdit(row.id)"
-            >
+            <el-button type="primary" link :icon="Edit" size="small" @click="handleEdit(row.id)">
               编辑
             </el-button>
-            <el-popconfirm
-              :title="`确定删除城市「${row.name}」吗？`"
-              confirm-button-text="确定"
-              cancel-button-text="取消"
-              @confirm="handleDelete(row)"
-            >
-              <template #reference>
-                <el-button type="danger" link :icon="Delete" size="small">
-                  删除
-                </el-button>
-              </template>
-            </el-popconfirm>
+            <el-button type="danger" link :icon="Delete" size="small" @click="handleDelete(row)">
+              删除
+            </el-button>
           </template>
         </el-table-column>
       </el-table>
 
-      <!-- 分页 -->
       <div class="pagination-wrap">
         <el-pagination
           v-model:current-page="pageParams.page"
@@ -214,32 +236,19 @@ function regionColor(region: string) {
   padding: 0;
 }
 
-.toolbar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
-}
-
-.toolbar-left {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-}
-
 .city-name {
   font-weight: 600;
-  color: #303133;
+  color: var(--lt-text-primary, #303133);
 }
 
 .city-name-en {
+  margin-top: 4px;
   font-size: 12px;
-  color: #909399;
+  color: var(--lt-text-secondary, #909399);
 }
 
-.pagination-wrap {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 16px;
+.image-fallback {
+  width: 52px;
+  height: 52px;
 }
 </style>

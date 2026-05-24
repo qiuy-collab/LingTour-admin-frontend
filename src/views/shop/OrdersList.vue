@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ordersApi } from '@/api/orders'
-import { OrderStatusMap, OrderStatusColorMap } from '@/types/order'
+import { OrderStatusMap, OrderStatusColorMap, PaymentStatusMap, PaymentStatusColorMap } from '@/types/order'
 import type { Order } from '@/types/order'
+import { formatDateTime } from '@/utils/format'
+import { pickI18n } from '@/types/common'
 
 const router = useRouter()
 const loading = ref(false)
@@ -12,10 +14,16 @@ const list = ref<Order[]>([])
 const total = ref(0)
 const page = ref(1)
 const pageSize = ref(10)
+const keyword = ref('')
 const statusFilter = ref('')
+const paymentStatusFilter = ref('')
 const dateRange = ref<[string, string]>(['', ''])
 
 const statusOptions: { label: string; value: string }[] = Object.entries(OrderStatusMap).map(
+  ([value, label]) => ({ label, value })
+)
+
+const paymentStatusOptions: { label: string; value: string }[] = Object.entries(PaymentStatusMap).map(
   ([value, label]) => ({ label, value })
 )
 
@@ -26,12 +34,16 @@ async function fetchList() {
       page: page.value,
       pageSize: pageSize.value,
     }
+    if (keyword.value) params.keyword = keyword.value
     if (statusFilter.value) params.status = statusFilter.value
-    if (dateRange.value[0]) params.startDate = dateRange.value[0]
-    if (dateRange.value[1]) params.endDate = dateRange.value[1]
+    if (paymentStatusFilter.value) params.paymentStatus = paymentStatusFilter.value
+    if (dateRange.value && dateRange.value[0]) params.startDate = dateRange.value[0]
+    if (dateRange.value && dateRange.value[1]) params.endDate = dateRange.value[1]
     const res = await ordersApi.getOrders(params)
     list.value = res.data.data.items
     total.value = res.data.data.total
+  } catch (err: any) {
+    ElMessage.error(err?.response?.data?.message || '加载订单列表失败')
   } finally {
     loading.value = false
   }
@@ -43,7 +55,9 @@ function handleSearch() {
 }
 
 function handleReset() {
+  keyword.value = ''
   statusFilter.value = ''
+  paymentStatusFilter.value = ''
   dateRange.value = ['', '']
   page.value = 1
   fetchList()
@@ -67,66 +81,90 @@ function handleViewDetail(id: string) {
 async function handleShip(row: Order) {
   try {
     await ElMessageBox.confirm(
-      `确定将订单 ${row.orderNo} 标记为已发货？`,
+      `确定将订单 ${row.orderNo} 标记为已发货?`,
       '确认发货',
       { type: 'info' }
     )
     await ordersApi.markShipped(row.id)
     row.status = 'shipped'
     ElMessage.success(`订单 ${row.orderNo} 已发货`)
-  } catch { /* 取消 */ }
+  } catch (err: any) {
+    if (err?.response) ElMessage.error(err.response.data?.message || '发货失败')
+  }
 }
 
 async function handleRefund(row: Order) {
   try {
     const { value: reason } = await ElMessageBox.prompt(
-      '请输入退款原因',
+      '请输入退款原因(可选)',
       '确认退款',
-      { inputPlaceholder: '退款原因（可选）', inputType: 'textarea' }
+      {
+        inputPlaceholder: '退款原因',
+        inputType: 'textarea',
+        confirmButtonText: '确定退款',
+        cancelButtonText: '取消',
+      }
     )
     await ordersApi.markRefunded(row.id, reason || undefined)
-    row.status = 'refunded'
+    row.paymentStatus = 'refunded'
     ElMessage.success(`订单 ${row.orderNo} 已退款`)
-  } catch { /* 取消 */ }
-}
-
-function formatDate(d: string) {
-  if (!d) return '-'
-  return new Date(d).toLocaleString('zh-CN', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
+  } catch (err: any) {
+    if (err?.response) ElMessage.error(err.response.data?.message || '退款失败')
+  }
 }
 
 function itemsSummary(items: Order['items']) {
-  return items.map((i) => `${i.productName} ×${i.quantity}`).join('、')
+  if (!items || !items.length) return '-'
+  return items.map((i: any) => `${pickI18n(i.productName) || i.productName} ×${i.quantity}`).join('、')
 }
 
 onMounted(() => {
   fetchList()
 })
+
+watch([page, pageSize], () => fetchList())
 </script>
 
 <template>
-  <div class="page-container">
+  <div>
     <div class="page-header">
       <h2>订单管理</h2>
     </div>
 
     <!-- 筛选栏 -->
     <div class="search-bar">
+      <el-input
+        v-model="keyword"
+        placeholder="搜索订单号/用户邮箱"
+        clearable
+        style="width: 240px"
+        @keyup.enter="handleSearch"
+        @clear="handleSearch"
+      />
       <el-select
         v-model="statusFilter"
-        placeholder="订单状态"
+        placeholder="履约状态"
         clearable
         style="width: 140px"
         @change="handleSearch"
       >
         <el-option
           v-for="opt in statusOptions"
+          :key="opt.value"
+          :label="opt.label"
+          :value="opt.value"
+        />
+      </el-select>
+
+      <el-select
+        v-model="paymentStatusFilter"
+        placeholder="支付状态"
+        clearable
+        style="width: 140px"
+        @change="handleSearch"
+      >
+        <el-option
+          v-for="opt in paymentStatusOptions"
           :key="opt.value"
           :label="opt.label"
           :value="opt.value"
@@ -149,6 +187,7 @@ onMounted(() => {
       <el-button @click="handleReset">重置</el-button>
     </div>
 
+    <el-card shadow="never" class="table-card">
     <el-table :data="list" v-loading="loading" stripe>
       <el-table-column prop="orderNo" label="订单号" width="180" />
       <el-table-column label="用户" min-width="140">
@@ -169,7 +208,7 @@ onMounted(() => {
           </div>
         </template>
       </el-table-column>
-      <el-table-column label="状态" width="100" align="center">
+      <el-table-column label="履约状态" width="100" align="center">
         <template #default="{ row }">
           <el-tag
             :type="(OrderStatusColorMap as Record<string, string>)[row.status]"
@@ -179,26 +218,38 @@ onMounted(() => {
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="下单时间" width="170">
+      <el-table-column label="支付状态" width="100" align="center">
         <template #default="{ row }">
-          {{ formatDate(row.createdAt) }}
+          <el-tag
+            :type="(PaymentStatusColorMap as Record<string, string>)[row.paymentStatus]"
+            size="small"
+          >
+            {{ (PaymentStatusMap as Record<string, string>)[row.paymentStatus] }}
+          </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="240" fixed="right">
+      <el-table-column label="下单时间" width="170">
         <template #default="{ row }">
-          <el-button size="small" @click="handleViewDetail(row.id)">详情</el-button>
+          {{ formatDateTime(row.createdAt) }}
+        </template>
+      </el-table-column>
+      <el-table-column label="操作" width="200" fixed="right">
+        <template #default="{ row }">
+          <el-button type="primary" link size="small" @click="handleViewDetail(row.id)">详情</el-button>
           <el-button
-            v-if="row.status === 'paid'"
-            size="small"
+            v-if="row.status === 'confirmed' && row.paymentStatus === 'paid'"
             type="success"
+            link
+            size="small"
             @click="handleShip(row)"
           >
             发货
           </el-button>
           <el-button
-            v-if="row.status === 'paid' || row.status === 'shipped'"
-            size="small"
+            v-if="row.paymentStatus === 'paid' && row.status !== 'cancelled'"
             type="warning"
+            link
+            size="small"
             @click="handleRefund(row)"
           >
             退款
@@ -207,26 +258,21 @@ onMounted(() => {
       </el-table-column>
     </el-table>
 
-    <div class="pagination-wrap" v-if="total > pageSize">
+    <div class="pagination-wrap">
       <el-pagination
         v-model:current-page="page"
         v-model:page-size="pageSize"
         :total="total"
-        :page-sizes="[10, 20, 50]"
+        :page-sizes="[10, 20, 50, 100]"
         layout="total, sizes, prev, pager, next"
-        @current-change="handlePageChange"
-        @size-change="handleSizeChange"
+        background
       />
     </div>
+    </el-card>
   </div>
 </template>
 
 <style scoped>
-.page-container { padding: 20px; }
-.page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
-.page-header h2 { margin: 0; font-size: 20px; }
-.search-bar { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
-.pagination-wrap { margin-top: 16px; display: flex; justify-content: flex-end; }
 .items-summary {
   overflow: hidden;
   text-overflow: ellipsis;

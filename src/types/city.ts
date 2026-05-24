@@ -36,6 +36,7 @@ export interface City {
   published?: boolean
   status?: 'draft' | 'published'
   routeSlugs?: string[]
+  relatedCitySlugs?: string[]
   createdAt?: string
   updatedAt?: string
   deletedAt?: string | null
@@ -59,4 +60,5 @@ export interface CityFormData {
   published?: boolean
   status?: 'draft' | 'published'
   routeSlugs?: string[]
+  relatedCitySlugs?: string[]
 }

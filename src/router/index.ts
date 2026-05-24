@@ -214,25 +214,52 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/home/HomeConfig.vue'),
         meta: { title: '首页配置' },
       },
+      {
+        path: 'operations/audit',
+        name: 'ContentAudit',
+        component: () => import('@/views/operations/ContentAudit.vue'),
+        meta: { title: '数据体检' },
+      },
+      // 媒体库
+      {
+        path: 'media',
+        name: 'MediaLibrary',
+        component: () => import('@/views/media/MediaLibrary.vue'),
+        meta: { title: '媒体库' },
+      },
       // 用户管理
       {
         path: 'users',
         name: 'Users',
         component: () => import('@/views/users/UsersList.vue'),
-        meta: { title: '用户管理' },
+        meta: { title: '用户管理', roles: ['admin'] },
       },
       {
         path: 'users/:id',
         name: 'UserDetail',
         component: () => import('@/views/users/UserDetail.vue'),
-        meta: { title: '用户详情' },
+        meta: { title: '用户详情', roles: ['admin'] },
       },
       // 系统设置
       {
         path: 'settings',
         name: 'Settings',
         component: () => import('@/views/settings/Settings.vue'),
-        meta: { title: '系统设置' },
+        meta: { title: '系统设置', roles: ['admin'] },
+      },
+      // 操作日志
+      {
+        path: 'system/audit-logs',
+        name: 'AuditLogs',
+        component: () => import('@/views/system/AuditLogs.vue'),
+        meta: { title: '操作日志', roles: ['admin'] },
+      },
+      // 通知中心
+      {
+        path: 'system/notifications',
+        name: 'Notifications',
+        component: () => import('@/views/system/Notifications.vue'),
+        meta: { title: '通知中心' },
       },
       // 默认重定向
       {
@@ -247,7 +274,9 @@ const routes: RouteRecordRaw[] = [
   },
   {
     path: '/:pathMatch(.*)*',
-    redirect: '/admin/dashboard',
+    name: 'NotFound',
+    component: () => import('@/views/NotFound.vue'),
+    meta: { title: '页面不存在', requiresAuth: false },
   },
 ]
 
@@ -256,16 +285,36 @@ const router = createRouter({
   routes,
 })
 
-// 路由守卫：未登录 → /login
+// 路由守卫:未登录 → /login(并保留来源路径 redirect);已登录访问 /login → dashboard;角色不足拒绝
 router.beforeEach((to, _from, next) => {
   const authStore = useAuthStore()
-  if (to.meta.requiresAuth !== false && !authStore.isLoggedIn) {
-    next('/login')
-  } else if (to.path === '/login' && authStore.isLoggedIn) {
-    next('/admin/dashboard')
-  } else {
-    next()
+  const requiresAuth = to.meta.requiresAuth !== false
+  const requiredRoles = to.meta.roles as string[] | undefined
+
+  if (requiresAuth && !authStore.isLoggedIn) {
+    // 未登录,记录目标地址用于登录后跳回
+    next({
+      path: '/login',
+      query: to.fullPath !== '/login' ? { redirect: to.fullPath } : undefined,
+    })
+    return
   }
+
+  if (to.path === '/login' && authStore.isLoggedIn) {
+    next('/admin/dashboard')
+    return
+  }
+
+  if (requiredRoles && requiredRoles.length > 0) {
+    // 角色受限路由必须有合法用户对象,否则拒绝并强制重新登录
+    const role = authStore.currentUser?.role
+    if (!role || !requiredRoles.includes(role)) {
+      next('/login')
+      return
+    }
+  }
+
+  next()
 })
 
 export default router
