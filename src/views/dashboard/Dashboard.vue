@@ -1,9 +1,17 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, nextTick } from 'vue'
-import * as echarts from 'echarts'
+import { ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import { useRouter } from 'vue-router'
+import { BarChart, LineChart, PieChart } from 'echarts/charts'
+import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/components'
+import { init, use, graphic, type ECharts } from 'echarts/core'
+import { CanvasRenderer } from 'echarts/renderers'
 import { getDashboardStats } from '@/api/dashboard'
 import type { DashboardData } from '@/types/dashboard'
+import { useTheme } from '@/composables/useTheme'
 import { ElMessage } from 'element-plus'
+import { gsap } from 'gsap'
+import { prefersReducedMotion } from '@/utils/motion'
+import OnboardingTour from '@/components/OnboardingTour.vue'
 import {
   User,
   MapLocation,
@@ -12,33 +20,212 @@ import {
   Microphone,
   Calendar,
   Tickets,
+  Picture,
+  ArrowRight,
+  QuestionFilled,
 } from '@element-plus/icons-vue'
 
+use([
+  LineChart,
+  PieChart,
+  BarChart,
+  GridComponent,
+  TooltipComponent,
+  LegendComponent,
+  CanvasRenderer,
+])
+
 const iconMap: Record<string, any> = { User, MapLocation, Guide, Goods, Microphone, Calendar, Tickets }
+const { isDark } = useTheme()
+const router = useRouter()
 
 const loading = ref(false)
 const data = ref<DashboardData | null>(null)
+const dashboardRoot = ref<HTMLElement>()
+const guideOpen = ref(false)
+let dashboardMotionContext: gsap.Context | undefined
+let guideTimer: number | undefined
+
+type DashboardStatKey = keyof DashboardData['stats']
+
+interface DashboardStatCard {
+  key: DashboardStatKey
+  label: string
+  icon: keyof typeof iconMap
+  color: string
+  softColor: string
+  path: string
+}
+
+const statCards: DashboardStatCard[] = [
+  {
+    key: 'totalUsers',
+    label: '用户总数',
+    icon: 'User',
+    color: 'var(--lt-primary)',
+    softColor: 'color-mix(in srgb, var(--lt-primary) 16%, transparent)',
+    path: '/admin/users',
+  },
+  {
+    key: 'totalCities',
+    label: '覆盖城市',
+    icon: 'MapLocation',
+    color: 'var(--lt-success)',
+    softColor: 'color-mix(in srgb, var(--lt-success) 16%, transparent)',
+    path: '/admin/cities',
+  },
+  {
+    key: 'totalRoutes',
+    label: '已发布路线',
+    icon: 'Guide',
+    color: 'var(--lt-warning)',
+    softColor: 'color-mix(in srgb, var(--lt-warning) 16%, transparent)',
+    path: '/admin/routes',
+  },
+  {
+    key: 'totalProducts',
+    label: '商城商品',
+    icon: 'Goods',
+    color: 'var(--lt-danger)',
+    softColor: 'color-mix(in srgb, var(--lt-danger) 16%, transparent)',
+    path: '/admin/shop/products',
+  },
+  {
+    key: 'totalInterpreters',
+    label: '口译员',
+    icon: 'Microphone',
+    color: 'var(--lt-info)',
+    softColor: 'color-mix(in srgb, var(--lt-info) 16%, transparent)',
+    path: '/admin/interpreting/profiles',
+  },
+  {
+    key: 'pendingBookings',
+    label: '待处理预约',
+    icon: 'Calendar',
+    color: 'var(--lt-warning)',
+    softColor: 'color-mix(in srgb, var(--lt-warning) 16%, transparent)',
+    path: '/admin/interpreting/bookings',
+  },
+  {
+    key: 'pendingOrders',
+    label: '待处理订单',
+    icon: 'Tickets',
+    color: 'var(--lt-route-mountain)',
+    softColor: 'color-mix(in srgb, var(--lt-route-mountain) 16%, transparent)',
+    path: '/admin/orders',
+  },
+]
+
+const quickActions = [
+  { label: '新建路线', hint: '规划新的文化旅程', path: '/admin/routes/create', icon: Guide },
+  { label: '新建商品', hint: '录入商品与视频媒体', path: '/admin/shop/products/create', icon: Goods },
+  { label: '媒体库', hint: '管理图片与视频素材', path: '/admin/media', icon: Picture },
+]
+
+function resolveThemeColor(token: string, fallback: string) {
+  if (typeof window === 'undefined') return fallback
+  const value = getComputedStyle(document.documentElement).getPropertyValue(token).trim()
+  return value || fallback
+}
+
+function resolveThemeRadius(token: string, fallback: number) {
+  const rawValue = resolveThemeColor(token, `${fallback}px`)
+  const parsed = Number.parseFloat(rawValue)
+  return Number.isFinite(parsed) ? parsed : fallback
+}
+
+function withAlpha(hexColor: string, alpha: number) {
+  const normalized = hexColor.replace('#', '').trim()
+  const expanded = normalized.length === 3
+    ? normalized.split('').map((char) => `${char}${char}`).join('')
+    : normalized
+
+  if (expanded.length !== 6) {
+    return hexColor
+  }
+
+  const red = Number.parseInt(expanded.slice(0, 2), 16)
+  const green = Number.parseInt(expanded.slice(2, 4), 16)
+  const blue = Number.parseInt(expanded.slice(4, 6), 16)
+
+  return `rgba(${red}, ${green}, ${blue}, ${alpha})`
+}
+
+function getDashboardPalette() {
+  const primary = resolveThemeColor('--lt-primary', '#409eff')
+  const success = resolveThemeColor('--lt-success', '#67c23a')
+  const warning = resolveThemeColor('--lt-warning', '#e6a23c')
+  const info = resolveThemeColor('--lt-info', '#909399')
+  const cardBackground = resolveThemeColor('--lt-bg-card', '#ffffff')
+  const radiusSm = resolveThemeRadius('--lt-radius-sm', 6)
+
+  return {
+    primary,
+    success,
+    warning,
+    info,
+    cardBackground,
+    radiusSm,
+    primaryStrong: withAlpha(primary, 0.3),
+    primarySoft: withAlpha(primary, 0.05),
+    successStrong: withAlpha(success, 0.3),
+    successSoft: withAlpha(success, 0.05),
+  }
+}
 
 // ECharts 实例
 const trendChartRef = ref<HTMLDivElement>()
 const pieChartRef = ref<HTMLDivElement>()
 const barChartRef = ref<HTMLDivElement>()
-let trendChart: echarts.ECharts | null = null
-let pieChart: echarts.ECharts | null = null
-let barChart: echarts.ECharts | null = null
+let trendChart: ECharts | null = null
+let pieChart: ECharts | null = null
+let barChart: ECharts | null = null
 
 async function fetchData() {
   loading.value = true
   try {
-    const res = await getDashboardStats()
-    data.value = res.data.data
+    data.value = await getDashboardStats()
     await nextTick()
     renderCharts()
+    animateDashboardData()
   } catch (err: any) {
     ElMessage.error(err?.response?.data?.message || '获取仪表盘数据失败')
   } finally {
     loading.value = false
   }
+}
+
+function animateDashboardData() {
+  if (!dashboardRoot.value || prefersReducedMotion()) return
+
+  dashboardMotionContext?.revert()
+  dashboardMotionContext = gsap.context(() => {
+    gsap.fromTo(
+      '.stat-card',
+      { autoAlpha: 0, y: 16 },
+      {
+        autoAlpha: 1,
+        y: 0,
+        duration: 0.46,
+        stagger: 0.045,
+        ease: 'power3.out',
+        clearProps: 'transform,opacity,visibility',
+      },
+    )
+    gsap.fromTo(
+      '.chart-card',
+      { autoAlpha: 0, y: 18 },
+      {
+        autoAlpha: 1,
+        y: 0,
+        duration: 0.52,
+        stagger: 0.08,
+        delay: 0.12,
+        ease: 'power3.out',
+        clearProps: 'transform,opacity,visibility',
+      },
+    )
+  }, dashboardRoot.value)
 }
 
 function renderCharts() {
@@ -51,7 +238,8 @@ function renderCharts() {
 function renderTrendChart() {
   if (!trendChartRef.value || !data.value) return
   if (trendChart) trendChart.dispose()
-  trendChart = echarts.init(trendChartRef.value)
+  trendChart = init(trendChartRef.value)
+  const palette = getDashboardPalette()
 
   const dates = data.value.orderTrend.map((t) => t.date.slice(5)) // MM-DD
   const amounts = data.value.orderTrend.map((t) => t.amount)
@@ -101,11 +289,11 @@ function renderTrendChart() {
         type: 'line',
         data: amounts,
         smooth: true,
-        itemStyle: { color: '#409EFF' },
+        itemStyle: { color: palette.primary },
         areaStyle: {
-          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-            { offset: 0, color: 'rgba(64, 158, 255, 0.3)' },
-            { offset: 1, color: 'rgba(64, 158, 255, 0.05)' },
+          color: new graphic.LinearGradient(0, 0, 0, 1, [
+            { offset: 0, color: palette.primaryStrong },
+            { offset: 1, color: palette.primarySoft },
           ]),
         },
       },
@@ -115,11 +303,11 @@ function renderTrendChart() {
         yAxisIndex: 1,
         data: counts,
         smooth: true,
-        itemStyle: { color: '#67C23A' },
+        itemStyle: { color: palette.success },
         areaStyle: {
-          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-            { offset: 0, color: 'rgba(103, 194, 58, 0.3)' },
-            { offset: 1, color: 'rgba(103, 194, 58, 0.05)' },
+          color: new graphic.LinearGradient(0, 0, 0, 1, [
+            { offset: 0, color: palette.successStrong },
+            { offset: 1, color: palette.successSoft },
           ]),
         },
       },
@@ -130,7 +318,8 @@ function renderTrendChart() {
 function renderPieChart() {
   if (!pieChartRef.value || !data.value) return
   if (pieChart) pieChart.dispose()
-  pieChart = echarts.init(pieChartRef.value)
+  pieChart = init(pieChartRef.value)
+  const palette = getDashboardPalette()
 
   const pieData = data.value.bookingModeDist.map((item) => ({
     name: item.mode,
@@ -143,30 +332,35 @@ function renderPieChart() {
       formatter: '{b}: {c} ({d}%)',
     },
     legend: {
-      orient: 'vertical',
-      left: 'left',
-      top: 'center',
+      type: 'scroll',
+      orient: 'horizontal',
+      left: 'center',
+      right: 12,
+      bottom: 0,
+      itemWidth: 10,
+      itemHeight: 10,
+      textStyle: { fontSize: 10 },
+      formatter: (name: string) => name.length > 22 ? `${name.slice(0, 22)}…` : name,
     },
     series: [
       {
         type: 'pie',
-        radius: ['45%', '75%'],
-        center: ['60%', '50%'],
-        avoidLabelOverlap: false,
+        radius: ['40%', '68%'],
+        center: ['50%', '42%'],
+        avoidLabelOverlap: true,
         itemStyle: {
-          borderRadius: 4,
-          borderColor: '#fff',
+          borderRadius: palette.radiusSm,
+          borderColor: palette.cardBackground,
           borderWidth: 2,
         },
         label: {
-          show: true,
-          formatter: '{b}\n{d}%',
+          show: false,
         },
         emphasis: {
           label: { show: true, fontSize: 14, fontWeight: 'bold' },
         },
         data: pieData,
-        color: ['#409EFF', '#67C23A', '#E6A23C'],
+        color: [palette.primary, palette.success, palette.warning],
       },
     ],
   })
@@ -175,7 +369,8 @@ function renderPieChart() {
 function renderBarChart() {
   if (!barChartRef.value || !data.value) return
   if (barChart) barChart.dispose()
-  barChart = echarts.init(barChartRef.value)
+  barChart = init(barChartRef.value)
+  const palette = getDashboardPalette()
 
   const cities = data.value.topCities.map((c) => c.city)
   const routeCounts = data.value.topCities.map((c) => c.routeCount)
@@ -210,14 +405,14 @@ function renderBarChart() {
         name: '关联路线',
         type: 'bar',
         data: routeCounts,
-        itemStyle: { color: '#409EFF', borderRadius: [4, 4, 0, 0] },
+        itemStyle: { color: palette.primary, borderRadius: [palette.radiusSm, palette.radiusSm, 0, 0] },
         barMaxWidth: 30,
       },
       {
         name: '口译预约',
         type: 'bar',
         data: bookingCounts,
-        itemStyle: { color: '#E6A23C', borderRadius: [4, 4, 0, 0] },
+        itemStyle: { color: palette.warning, borderRadius: [palette.radiusSm, palette.radiusSm, 0, 0] },
         barMaxWidth: 30,
       },
     ],
@@ -234,6 +429,17 @@ function handleResize() {
 onMounted(() => {
   fetchData()
   window.addEventListener('resize', handleResize)
+  if (localStorage.getItem('lingtour-admin-onboarding-v1') !== 'done') {
+    guideTimer = window.setTimeout(() => {
+      guideOpen.value = true
+    }, 450)
+  }
+})
+
+watch(isDark, async () => {
+  if (!data.value) return
+  await nextTick()
+  renderCharts()
 })
 
 onUnmounted(() => {
@@ -241,76 +447,94 @@ onUnmounted(() => {
   trendChart?.dispose()
   pieChart?.dispose()
   barChart?.dispose()
+  dashboardMotionContext?.revert()
+  window.clearTimeout(guideTimer)
 })
 </script>
 
 <template>
-  <div class="dashboard" v-loading="loading">
-    <div class="page-header">
-      <h2>仪表盘</h2>
+  <div ref="dashboardRoot" class="dashboard" v-loading="loading">
+    <div class="dashboard-tools">
+      <el-button :icon="QuestionFilled" @click="guideOpen = true">新手引导</el-button>
     </div>
+
+    <nav class="quick-actions" aria-label="快捷操作" data-tour="quick-actions">
+      <button
+        v-for="action in quickActions"
+        :key="action.path"
+        type="button"
+        class="quick-action"
+        @click="router.push(action.path)"
+      >
+        <span class="quick-action__icon"><el-icon><component :is="action.icon" /></el-icon></span>
+        <span class="quick-action__copy">
+          <strong>{{ action.label }}</strong>
+          <small>{{ action.hint }}</small>
+        </span>
+        <el-icon class="quick-action__arrow"><ArrowRight /></el-icon>
+      </button>
+    </nav>
 
     <!-- 统计卡片 -->
-    <div class="stats-grid">
-      <div v-for="card in [
-        { key: 'totalUsers', label: '用户总数', icon: 'User', color: '#409EFF' },
-        { key: 'totalCities', label: '覆盖城市', icon: 'MapLocation', color: '#67C23A' },
-        { key: 'totalRoutes', label: '已发布路线', icon: 'Guide', color: '#E6A23C' },
-        { key: 'totalProducts', label: '商城商品', icon: 'Goods', color: '#F56C6C' },
-        { key: 'totalInterpreters', label: '口译员', icon: 'Microphone', color: '#909399' },
-        { key: 'pendingBookings', label: '待处理预约', icon: 'Calendar', color: '#FF9800' },
-        { key: 'pendingOrders', label: '待处理订单', icon: 'Tickets', color: '#9C27B0' },
-      ]" :key="card.key">
-        <el-card shadow="hover" class="stat-card">
-          <div class="stat-content">
-            <div class="stat-icon" :style="{ background: card.color + '1a', color: card.color }">
-              <el-icon :size="24">
-                <component :is="iconMap[card.icon]" />
-              </el-icon>
-            </div>
-            <div class="stat-text">
-              <div class="stat-label">{{ card.label }}</div>
-              <div class="stat-value" :style="{ color: card.color }">
-                {{ data?.stats[card.key as keyof typeof data.stats] ?? '-' }}
-              </div>
-            </div>
-          </div>
-        </el-card>
-      </div>
+    <div class="stats-grid" data-tour="stats">
+      <button
+        v-for="card in statCards"
+        :key="card.key"
+        type="button"
+        class="stat-card"
+        :data-tour="card.key === 'pendingBookings' ? 'pending-bookings' : undefined"
+        @click="router.push(card.path)"
+      >
+        <div class="stat-card__top">
+          <span class="stat-icon" :style="{ background: card.softColor, color: card.color }">
+            <el-icon :size="20"><component :is="iconMap[card.icon]" /></el-icon>
+          </span>
+          <el-icon class="stat-arrow"><ArrowRight /></el-icon>
+        </div>
+        <div class="stat-text">
+          <span class="stat-label">{{ card.label }}</span>
+          <strong class="stat-value">{{ data?.stats?.[card.key] ?? '—' }}</strong>
+          <small>实时汇总</small>
+        </div>
+      </button>
     </div>
 
-    <!-- 图表区域 -->
-    <el-row :gutter="16" class="charts-row">
-      <!-- 近30天订单金额趋势 -->
-      <el-col :span="24" style="margin-bottom: 16px">
-        <el-card shadow="hover">
-          <template #header>
-            <span class="chart-title">📈 近30天订单趋势</span>
-          </template>
-          <div ref="trendChartRef" class="chart-container" style="height: 360px"></div>
-        </el-card>
-      </el-col>
+    <section class="chart-grid" aria-label="运营趋势" data-tour="charts">
+      <article class="chart-card chart-card--wide">
+        <header class="chart-header">
+          <div>
+            <span>近 30 天</span>
+            <h3>订单趋势</h3>
+          </div>
+          <p>金额与订单量的联合变化</p>
+        </header>
+        <div ref="trendChartRef" class="chart-container chart-container--trend" />
+      </article>
 
-      <!-- 口译预约模式分布 -->
-      <el-col :xs="24" :md="12" style="margin-bottom: 16px">
-        <el-card shadow="hover">
-          <template #header>
-            <span class="chart-title">🎯 口译预约按模式分布</span>
-          </template>
-          <div ref="pieChartRef" class="chart-container" style="height: 320px"></div>
-        </el-card>
-      </el-col>
+      <article class="chart-card">
+        <header class="chart-header">
+          <div>
+            <span>服务构成</span>
+            <h3>口译预约分布</h3>
+          </div>
+          <p>按服务模式拆分</p>
+        </header>
+        <div ref="pieChartRef" class="chart-container" />
+      </article>
 
-      <!-- 热门城市 Top5 -->
-      <el-col :xs="24" :md="12" style="margin-bottom: 16px">
-        <el-card shadow="hover">
-          <template #header>
-            <span class="chart-title">🏙️ 热门城市 Top5</span>
-          </template>
-          <div ref="barChartRef" class="chart-container" style="height: 320px"></div>
-        </el-card>
-      </el-col>
-    </el-row>
+      <article class="chart-card">
+        <header class="chart-header">
+          <div>
+            <span>目的地热度</span>
+            <h3>热门城市 Top 5</h3>
+          </div>
+          <p>路线与预约热度</p>
+        </header>
+        <div ref="barChartRef" class="chart-container" />
+      </article>
+    </section>
+
+    <OnboardingTour v-model="guideOpen" />
   </div>
 </template>
 
@@ -319,72 +543,253 @@ onUnmounted(() => {
   padding: 0;
 }
 
-.stats-grid {
+.dashboard-tools {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 12px;
+}
+
+.quick-actions {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: 16px;
-  margin-bottom: 24px;
-}
-
-.stat-card {
-  height: 100%;
-}
-
-.stat-content {
-  display: flex;
-  align-items: center;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
+  margin-bottom: 18px;
 }
 
-.stat-icon {
-  width: 48px;
-  height: 48px;
-  border-radius: 12px;
-  display: flex;
+.quick-action {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  min-width: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--lt-border-light);
+  border-radius: var(--lt-radius-lg);
+  background: var(--lt-bg-card);
+  color: var(--lt-text-primary);
+  text-align: left;
+  cursor: pointer;
+  box-shadow: var(--lt-shadow-sm);
+  transition: transform 220ms var(--lt-ease-out), border-color 180ms ease, box-shadow 220ms ease;
+}
+
+.quick-action:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--lt-primary) 34%, var(--lt-border-color));
+  box-shadow: var(--lt-shadow-md);
+}
+
+.quick-action__icon {
+  display: inline-flex;
+  width: 38px;
+  height: 38px;
   align-items: center;
   justify-content: center;
-  flex-shrink: 0;
+  border-radius: 12px;
+  background: var(--lt-primary-soft);
+  color: var(--lt-primary);
 }
 
-.stat-text {
-  flex: 1;
+.quick-action__copy {
+  display: grid;
   min-width: 0;
 }
 
-.stat-label {
+.quick-action__copy strong {
   font-size: 13px;
-  color: var(--lt-text-secondary, #909399);
-  margin-bottom: 4px;
+}
+
+.quick-action__copy small {
+  overflow: hidden;
+  margin-top: 3px;
+  color: var(--lt-text-secondary);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quick-action__arrow,
+.stat-arrow {
+  color: var(--lt-text-placeholder);
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.stat-card {
+  display: grid;
+  min-width: 0;
+  min-height: 164px;
+  padding: 17px;
+  border: 1px solid var(--lt-border-light);
+  border-radius: var(--lt-radius-lg);
+  background: var(--lt-bg-card);
+  color: var(--lt-text-primary);
+  text-align: left;
+  cursor: pointer;
+  box-shadow: var(--lt-shadow-sm);
+  transition: transform 220ms var(--lt-ease-out), border-color 180ms ease, box-shadow 220ms ease;
+}
+
+.stat-card:hover {
+  transform: translateY(-3px);
+  border-color: color-mix(in srgb, var(--lt-primary) 30%, var(--lt-border-color));
+  box-shadow: var(--lt-shadow-md);
+}
+
+.stat-card__top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.stat-icon {
+  display: inline-flex;
+  width: 40px;
+  height: 40px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+}
+
+.stat-text {
+  display: grid;
+  align-self: end;
+}
+
+.stat-label {
+  color: var(--lt-text-secondary);
+  font-size: 11px;
 }
 
 .stat-value {
-  font-size: 24px;
-  font-weight: 700;
-  line-height: 1.2;
+  margin-top: 5px;
+  font-size: 30px;
+  font-weight: 650;
+  letter-spacing: -0.04em;
+  line-height: 1;
 }
 
-.charts-row {
-  margin-top: 0;
+.stat-text small {
+  margin-top: 7px;
+  color: var(--lt-text-placeholder);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
-.chart-title {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--lt-text-primary, #303133);
+.chart-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.chart-card {
+  min-width: 0;
+  padding: clamp(18px, 2vw, 26px);
+  border: 1px solid var(--lt-border-light);
+  border-radius: var(--lt-radius-xl);
+  background: var(--lt-bg-card);
+  box-shadow: var(--lt-shadow-sm);
+}
+
+.chart-card--wide {
+  grid-column: 1 / -1;
+}
+
+.chart-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.chart-header span {
+  color: var(--lt-primary);
+  font-size: 9px;
+  font-weight: 750;
+  letter-spacing: 0.13em;
+}
+
+.chart-header h3 {
+  margin: 6px 0 0;
+  color: var(--lt-text-primary);
+  font-size: 18px;
+  font-weight: 650;
+  letter-spacing: -0.025em;
+}
+
+.chart-header p {
+  margin: 0;
+  color: var(--lt-text-secondary);
+  font-size: 10px;
 }
 
 .chart-container {
   width: 100%;
+  height: 310px;
+}
+
+.chart-container--trend {
+  height: 350px;
+}
+
+@media (max-width: 1180px) {
+  .stats-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 768px) {
+  .quick-actions {
+    display: flex;
+    overflow-x: auto;
+    margin-inline: -14px;
+    padding-inline: 14px;
+    scroll-snap-type: x proximity;
+    scrollbar-width: none;
+  }
+
+  .quick-action {
+    min-width: min(82vw, 300px);
+    scroll-snap-align: start;
+  }
+
   .stats-grid {
     grid-template-columns: repeat(2, 1fr);
-    gap: 12px;
+  }
+
+  .stat-card {
+    min-height: 148px;
+    padding: 15px;
   }
 
   .stat-value {
-    font-size: 18px;
+    font-size: 26px;
+  }
+
+  .chart-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .chart-card--wide {
+    grid-column: auto;
+  }
+
+  .chart-container,
+  .chart-container--trend {
+    height: 280px;
+  }
+
+  .chart-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
   }
 }
 </style>

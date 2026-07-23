@@ -1,147 +1,223 @@
 <script setup lang="ts">
-import { ref, watch, computed } from 'vue'
-import { Plus, Delete, ZoomIn, Loading } from '@element-plus/icons-vue'
+import { computed, ref, watch } from 'vue'
+import {
+  ArrowLeft,
+  ArrowRight,
+  Delete,
+  Picture,
+  VideoCamera,
+  ZoomIn,
+} from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { resolveMediaUrl } from '@/utils/media'
+import MediaPickerDialog from '@/components/media/MediaPickerDialog.vue'
+
+type UploadItem = {
+  uid: string
+  name: string
+  url: string
+  rawUrl: string
+  kind: 'image' | 'video'
+}
 
 const props = withDefaults(
   defineProps<{
     modelValue: string | string[]
+    mode?: 'single' | 'multiple'
     multiple?: boolean
     limit?: number
     accept?: string
+    mediaKind?: 'image' | 'video' | 'mixed'
+    module?: string
+    sortable?: boolean
+    entityType?: string
+    entityId?: string
   }>(),
   {
+    mode: 'single',
     multiple: false,
     limit: 1,
-    accept: 'image/*',
-  }
+    accept: '',
+    mediaKind: 'image',
+    module: '',
+    sortable: true,
+    entityType: '',
+    entityId: '',
+  },
 )
 
 const emit = defineEmits<{
   'update:modelValue': [value: string | string[]]
 }>()
 
-// 处理 modelValue
-const fileList = ref<any[]>([])
-const uploading = ref(false)
+const fileList = ref<UploadItem[]>([])
+const pickerVisible = ref(false)
+const isMultiple = computed(() => props.mode === 'multiple' || props.multiple)
+const uploadLimit = computed(() => (isMultiple.value ? props.limit : 1))
+const hasReachedLimit = computed(
+  () => isMultiple.value && fileList.value.length >= uploadLimit.value,
+)
+const effectiveAccept = computed(() => {
+  if (props.accept) return props.accept
+  if (props.mediaKind === 'video') return 'video/mp4,video/webm,video/quicktime,video/x-m4v'
+  if (props.mediaKind === 'mixed')
+    return 'image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm,video/quicktime,video/x-m4v'
+  return 'image/jpeg,image/png,image/webp,image/gif'
+})
+const mediaNoun = computed(() => (props.mediaKind === 'video' ? '视频' : '图片'))
 
-/** 上传请求自动注入鉴权头 */
-const uploadHeaders = computed(() => {
-  const token = localStorage.getItem('token')
-  return token ? { Authorization: `Bearer ${token}` } : {}
+function isVideoSource(url: string) {
+  if (props.mediaKind === 'video') return true
+  return /\.(mp4|webm|mov|m4v)(?:$|[?#])/i.test(url)
+}
+
+const triggerLabel = computed(() => {
+  if (!fileList.value.length) return '选择媒体'
+  if (!isMultiple.value) return `更换${mediaNoun.value}`
+  if (hasReachedLimit.value) return '管理已选文件'
+  return '继续添加'
+})
+const helperCopy = computed(() => {
+  if (isMultiple.value) {
+    return `已选择 ${fileList.value.length}/${uploadLimit.value}`
+  }
+  return fileList.value.length
+    ? `已选择 1 个${mediaNoun.value}`
+    : `尚未选择${mediaNoun.value}`
 })
 
-// 同步初始值
 watch(
   () => props.modelValue,
-  (val) => {
-    if (!val) {
+  (value) => {
+    if (!value) {
       fileList.value = []
       return
     }
-    if (props.multiple && Array.isArray(val)) {
-      fileList.value = val.map((url, index) => ({
-        uid: index,
-        name: `image-${index}`,
-        url: resolveMediaUrl(url),
-        status: 'success',
-      }))
-    } else if (!props.multiple && typeof val === 'string') {
-      fileList.value = val
-        ? [{ uid: 0, name: 'image-0', url: resolveMediaUrl(val), status: 'success' }]
-        : []
-    }
+
+    const urls =
+      isMultiple.value && Array.isArray(value)
+        ? value
+        : typeof value === 'string' && value
+          ? [value]
+          : []
+
+    fileList.value = urls.map((url, index) => ({
+      uid: `${index}-${url}`,
+      name: `image-${index + 1}`,
+      url: resolveMediaUrl(url),
+      rawUrl: url,
+      kind: isVideoSource(url) ? 'video' : 'image',
+    }))
   },
-  { immediate: true }
+  { immediate: true },
 )
 
-function handleSuccess(response: any) {
-  uploading.value = false
-  // 后端响应如非 0/null 视作业务错误
-  if (response && typeof response === 'object' && 'code' in response && response.code !== 0 && response.code !== 200) {
-    ElMessage.error(response.message || '上传失败')
-    return
+function readUrls(): string[] {
+  if (isMultiple.value) {
+    return Array.isArray(props.modelValue) ? [...props.modelValue] : []
   }
-  const url = response?.data?.url || response?.url || ''
-  if (!url) {
-    ElMessage.error('上传响应未返回 url')
-    return
-  }
-  if (props.multiple) {
-    const urls = [...(Array.isArray(props.modelValue) ? props.modelValue : [])]
-    urls.push(url)
-    emit('update:modelValue', urls)
-  } else {
-    emit('update:modelValue', url)
-  }
-  ElMessage.success('上传成功')
+
+  return typeof props.modelValue === 'string' && props.modelValue ? [props.modelValue] : []
 }
 
-function handleError(err: any) {
-  uploading.value = false
-  let msg = '上传失败'
-  try {
-    const parsed = typeof err === 'string' ? JSON.parse(err) : err
-    msg = parsed?.message || parsed?.statusText || msg
-  } catch {
-    /* ignore */
+const currentUrls = computed(() => readUrls())
+
+function syncValue(urls: string[]) {
+  if (isMultiple.value) {
+    emit('update:modelValue', urls)
+    return
   }
-  ElMessage.error(msg)
+
+  emit('update:modelValue', urls[0] || '')
+}
+
+function openMediaPicker() {
+  pickerVisible.value = true
+}
+
+function handlePickerConfirm(urls: string[]) {
+  if (!urls.length) return
+
+  if (isMultiple.value) {
+    const existing = readUrls()
+    const deduped = urls.filter((url) => !existing.includes(url))
+    const remainingSlots = Math.max(uploadLimit.value - existing.length, 0)
+    const nextUrls = existing.concat(deduped.slice(0, remainingSlots))
+
+    if (deduped.length > remainingSlots) {
+      ElMessage.warning(`最多可选择 ${uploadLimit.value} 个媒体文件`)
+    }
+
+    syncValue(nextUrls)
+    return
+  }
+
+  syncValue([urls[0]])
 }
 
 function handleRemove(index: number) {
-  if (props.multiple && Array.isArray(props.modelValue)) {
-    const urls = [...props.modelValue]
-    urls.splice(index, 1)
-    emit('update:modelValue', urls)
-  } else {
-    emit('update:modelValue', '')
-  }
+  const urls = readUrls()
+  urls.splice(index, 1)
+  syncValue(urls)
 }
 
-function beforeUpload(file: File) {
-  const isImage = file.type.startsWith('image/')
-  if (!isImage) {
-    ElMessage.error('只能上传图片文件')
-    return false
-  }
-  const isLt5M = file.size / 1024 / 1024 < 5
-  if (!isLt5M) {
-    ElMessage.error('图片大小不能超过 5MB')
-    return false
-  }
-  uploading.value = true
-  return true
-}
+function moveItem(index: number, delta: -1 | 1) {
+  if (!isMultiple.value) return
 
-const uploadLimit = computed(() => {
-  if (props.multiple) return props.limit
-  return 1
-})
+  const target = index + delta
+  const urls = readUrls()
+  if (target < 0 || target >= urls.length) return
+  ;[urls[index], urls[target]] = [urls[target], urls[index]]
+  syncValue(urls)
+}
 </script>
 
 <template>
   <div class="image-upload">
     <div class="image-preview-list">
-      <div
-        v-for="(item, index) in fileList"
-        :key="item.uid"
-        class="image-preview-item"
-      >
+      <div v-for="(item, index) in fileList" :key="item.uid" class="image-preview-item">
+        <video
+          v-if="item.kind === 'video'"
+          :src="item.url"
+          class="preview-image preview-video"
+          muted
+          playsinline
+          preload="metadata"
+        />
         <el-image
+          v-else
           :src="item.url"
           fit="cover"
           class="preview-image"
           :preview-src-list="[item.url]"
           preview-teleported
-        />
+        >
+          <template #error>
+            <div class="media-error">
+              <el-icon><Picture /></el-icon>
+              <span>资源失效</span>
+            </div>
+          </template>
+        </el-image>
         <div class="image-overlay">
-          <el-icon
-            class="preview-icon"
-            @click.stop="() => {}"
-          >
+          <el-icon class="preview-icon">
             <ZoomIn />
+          </el-icon>
+          <el-icon
+            v-if="isMultiple && sortable"
+            class="sort-icon"
+            :class="{ disabled: index === 0 }"
+            @click.stop="moveItem(index, -1)"
+          >
+            <ArrowLeft />
+          </el-icon>
+          <el-icon
+            v-if="isMultiple && sortable"
+            class="sort-icon"
+            :class="{ disabled: index === fileList.length - 1 }"
+            @click.stop="moveItem(index, 1)"
+          >
+            <ArrowRight />
           </el-icon>
           <el-icon class="delete-icon" @click.stop="handleRemove(index)">
             <Delete />
@@ -149,22 +225,36 @@ const uploadLimit = computed(() => {
         </div>
       </div>
 
-      <!-- 上传按钮 -->
-      <el-upload
-        v-if="fileList.length < uploadLimit"
-        :action="'/api/admin/upload'"
-        :headers="uploadHeaders"
-        :show-file-list="false"
-        :before-upload="beforeUpload"
-        :on-success="handleSuccess"
-        :on-error="handleError"
-        :accept="accept"
-        class="upload-trigger"
-      >
-        <el-icon v-if="uploading" class="upload-icon is-loading"><Loading /></el-icon>
-        <el-icon v-else class="upload-icon"><Plus /></el-icon>
-      </el-upload>
+      <button type="button" class="upload-trigger" @click="openMediaPicker">
+        <el-icon class="upload-icon">
+          <VideoCamera v-if="mediaKind === 'video'" />
+          <Picture v-else />
+        </el-icon>
+        <span class="upload-trigger-text">{{ triggerLabel }}</span>
+      </button>
     </div>
+
+    <div class="upload-meta">
+      <span>{{ helperCopy }}</span>
+      <span>{{
+        isMultiple ? `最多 ${uploadLimit} 个媒体文件` : `单个${mediaNoun}`
+      }}</span>
+      <span>从媒体库选择，或在弹窗中上传本地文件。</span>
+      <span v-if="module">分类：{{ module }}</span>
+    </div>
+
+    <MediaPickerDialog
+      v-model="pickerVisible"
+      :multiple="isMultiple"
+      :limit="uploadLimit"
+      :accept="effectiveAccept"
+      :media-type="mediaKind === 'mixed' ? undefined : mediaKind"
+      :module="module"
+      :entity-type="entityType || undefined"
+      :entity-id="entityId || undefined"
+      :selected-urls="currentUrls"
+      @confirm="handlePickerConfirm"
+    />
   </div>
 </template>
 
@@ -180,12 +270,12 @@ const uploadLimit = computed(() => {
 }
 
 .image-preview-item {
+  position: relative;
   width: 120px;
   height: 120px;
-  border: 1px solid #dcdfe6;
-  border-radius: 6px;
   overflow: hidden;
-  position: relative;
+  border: 1px solid var(--lt-border-color);
+  border-radius: var(--lt-radius-md);
   cursor: pointer;
 }
 
@@ -194,16 +284,34 @@ const uploadLimit = computed(() => {
   height: 100%;
 }
 
+.media-error {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  place-content: center;
+  gap: 7px;
+  background: var(--lt-bg-hover);
+  color: var(--lt-text-secondary);
+  font-size: 11px;
+  text-align: center;
+}
+
+.preview-video {
+  display: block;
+  object-fit: cover;
+  background: var(--lt-text-primary);
+}
+
 .image-overlay {
   position: absolute;
   inset: 0;
-  background: rgba(0, 0, 0, 0.5);
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 12px;
+  gap: 10px;
+  background: color-mix(in srgb, var(--lt-text-primary) 52%, transparent);
   opacity: 0;
-  transition: opacity 0.2s;
+  transition: opacity 0.2s ease;
 }
 
 .image-preview-item:hover .image-overlay {
@@ -211,44 +319,64 @@ const uploadLimit = computed(() => {
 }
 
 .preview-icon,
+.sort-icon,
 .delete-icon {
   color: #fff;
   font-size: 20px;
   cursor: pointer;
 }
 
+.sort-icon.disabled {
+  opacity: 0.35;
+  pointer-events: none;
+}
+
 .delete-icon:hover {
-  color: #f56c6c;
+  color: var(--lt-danger);
 }
 
 .upload-trigger {
-  width: 120px;
-  height: 120px;
-  border: 1px dashed #dcdfe6;
-  border-radius: 6px;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 8px;
+  width: 120px;
+  height: 120px;
+  border: 1px dashed var(--lt-border-color);
+  border-radius: var(--lt-radius-md);
+  background: var(--lt-bg-card);
   cursor: pointer;
-  transition: border-color 0.2s;
+  transition:
+    border-color 0.2s ease,
+    background-color 0.2s ease,
+    transform 0.2s ease;
 }
 
 .upload-trigger:hover {
-  border-color: #409eff;
+  border-color: var(--lt-primary);
+  background: var(--lt-bg-hover);
+  transform: translateY(-1px);
 }
 
 .upload-icon {
   font-size: 28px;
-  color: #c0c4cc;
+  color: var(--lt-primary);
 }
 
-.upload-icon.is-loading {
-  animation: rotate 1s linear infinite;
-  color: #409eff;
+.upload-trigger-text {
+  font-size: 12px;
+  color: var(--lt-text-regular);
+  text-align: center;
+  padding: 0 8px;
 }
 
-@keyframes rotate {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+.upload-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--lt-text-secondary);
 }
 </style>
