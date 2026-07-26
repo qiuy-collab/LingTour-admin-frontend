@@ -7,17 +7,33 @@ import router from '@/router'
 export const useAuthStore = defineStore('auth', () => {
   // State
   const token = ref<string | null>(localStorage.getItem('token'))
-  const user = ref<AdminUser | null>((() => {
-    try {
-      return JSON.parse(localStorage.getItem('user') || 'null')
-    } catch {
-      localStorage.removeItem('user')
-      return null
-    }
-  })())
+  const user = ref<AdminUser | null>(
+    (() => {
+      try {
+        return JSON.parse(localStorage.getItem('user') || 'null')
+      } catch {
+        localStorage.removeItem('user')
+        return null
+      }
+    })(),
+  )
 
   // Getters
-  const isLoggedIn = computed(() => !!token.value)
+  /**
+   * Decode the JWT payload (without verifying the signature — that's the
+   * server's job) and check whether the token has expired.
+   */
+  const isTokenValid = computed(() => {
+    if (!token.value) return false
+    try {
+      const payload = JSON.parse(atob(token.value.split('.')[1]))
+      return typeof payload.exp === 'number' && payload.exp > Date.now() / 1000
+    } catch {
+      return false
+    }
+  })
+
+  const isLoggedIn = computed(() => !!token.value && isTokenValid.value)
   const currentUser = computed(() => user.value)
 
   // Actions
@@ -29,6 +45,10 @@ export const useAuthStore = defineStore('auth', () => {
 
     if (!access_token || !loginUser) {
       throw new Error('Invalid response format')
+    }
+
+    if (loginUser.role !== 'admin' && loginUser.role !== 'editor') {
+      throw new Error('该账号没有后台管理权限')
     }
 
     token.value = access_token
@@ -49,6 +69,7 @@ export const useAuthStore = defineStore('auth', () => {
     token,
     user,
     isLoggedIn,
+    isTokenValid,
     currentUser,
     login,
     logout,
