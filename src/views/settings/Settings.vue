@@ -11,8 +11,8 @@ const saving = ref(false)
 // ─── 表单数据 ────────────────────────────────────
 const seoTitle = ref('')
 const seoDescription = ref('')
-const languages = ref<string[]>(['en', 'zh'])
-const defaultLocale = ref('zh')
+const languages = ref<string[]>(['en'])
+const defaultLocale = ref('en')
 const defaultCurrency = ref('SGD')
 const taxRate = ref(7.6)
 const serviceCities = ref<string[]>([])
@@ -26,11 +26,6 @@ const hintFontSize = ref(12)
 // 语言选项
 const languageOptions = [
   { label: 'English', value: 'en' },
-  { label: '中文', value: 'zh' },
-  { label: '日本語', value: 'ja' },
-  { label: '한국어', value: 'ko' },
-  { label: 'Français', value: 'fr' },
-  { label: 'Deutsch', value: 'de' },
 ]
 
 const currencyOptions = [
@@ -84,8 +79,8 @@ async function fetchSettings() {
     const data = res.data.data
     seoTitle.value = data.seoTitle
     seoDescription.value = data.seoDescription
-    languages.value = data.languages || ['en', 'zh']
-    defaultLocale.value = data.defaultLocale || (data.languages?.[0] ?? 'zh')
+    languages.value = ['en']
+    defaultLocale.value = 'en'
     defaultCurrency.value = data.defaultCurrency || 'SGD'
     taxRate.value = data.taxRate ?? 7.6
     shippingTemplates.value = JSON.parse(JSON.stringify(data.shippingTemplates || []))

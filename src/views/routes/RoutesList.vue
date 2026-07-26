@@ -1,60 +1,50 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted, watch, computed } from 'vue'
+import { computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
-import { Search, Plus, Edit, Delete } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
+import { Plus, Edit, Delete } from '@element-plus/icons-vue'
 import { routesApi } from '@/api/routes'
 import type { Route } from '@/types/route'
-import type { PaginatedResponse } from '@/types/common'
 import { pickI18n } from '@/types/common'
+import { formatRouteTagLabel, normalizeRouteTag } from '@/constants/guangdongRegions'
+import { useListPage } from '@/composables/useListPage'
+import { ListToolbar } from '@/components/list'
+import { resolveMediaUrl } from '@/utils/media'
 
 const router = useRouter()
 
 // ─── 文化标签映射 ──────────────────────────
 const cultureTagMap: Record<string, { label: string; color: string }> = {
-  Guangfu: { label: '广府', color: '#409EFF' },
-  Chaoshan: { label: '潮汕', color: '#E6A23C' },
-  Hakka: { label: '客家', color: '#67C23A' },
-  Coastal: { label: '滨海', color: '#00B5AD' },
-  BayArea: { label: '湾区', color: '#9C27B0' },
-  Mountain: { label: '山川', color: '#FF5722' },
+  'Bay Area': { label: formatRouteTagLabel('Bay Area'), color: 'var(--lt-route-bay)' },
+  Chaoshan: { label: formatRouteTagLabel('Chaoshan'), color: 'var(--lt-route-chaoshan)' },
+  Hakka: { label: formatRouteTagLabel('Hakka'), color: 'var(--lt-route-hakka)' },
+  Coastal: { label: formatRouteTagLabel('Coastal'), color: 'var(--lt-route-coastal)' },
+  Mountain: { label: formatRouteTagLabel('Mountain'), color: 'var(--lt-route-mountain)' },
 }
 
 function getCultureTagInfo(tag: string) {
-  return cultureTagMap[tag] || { label: tag, color: '#909399' }
+  const normalizedTag = normalizeRouteTag(tag)
+  return cultureTagMap[normalizedTag] || { label: normalizedTag, color: 'var(--lt-info)' }
 }
 
-// ─── 列表数据 ──────────────────────────────
-const loading = ref(false)
-const list = ref<Route[]>([])
-const total = ref(0)
-const pageParams = reactive({ page: 1, pageSize: 10, keyword: '', status: '', cityName: '' })
+// ─── 列表数据 (useListPage) ─────────────
+const {
+  loading, list, total, page, pageSize,
+  filters,
+  handlePageChange, handleSizeChange,
+  handleSearch, handleReset,
+  handleDelete,
+} = useListPage<Route>({
+  fetchApi: (params) => routesApi.getRoutes(params as any),
+  deleteApi: (id) => routesApi.deleteRoute(id),
+  defaultFilters: { keyword: '', status: '', cityName: '' },
+})
 
-async function fetchList() {
-  loading.value = true
-  try {
-    const res = await routesApi.getRoutes(pageParams)
-    const data: PaginatedResponse<Route> = res.data.data
-    list.value = data.items
-    total.value = data.total
-  } catch (err: any) {
-    ElMessage.error(err?.response?.data?.message || '获取路线列表失败')
-  } finally {
-    loading.value = false
-  }
-}
-
-onMounted(fetchList)
-
-watch(
-  () => [pageParams.page, pageParams.pageSize],
-  () => fetchList()
-)
-
-function handleSearch() {
-  pageParams.page = 1
-  fetchList()
-}
+// ─── 城市选项（从列表中提取） ────────────
+const cityOptions = computed(() => {
+  const cities = new Set(list.value.map((r) => r.cityName).filter(Boolean))
+  return Array.from(cities).sort()
+})
 
 // ─── 操作 ──────────────────────────────
 function handleCreate() {
@@ -63,22 +53,6 @@ function handleCreate() {
 
 function handleEdit(id: string) {
   router.push(`/admin/routes/${id}/edit`)
-}
-
-async function handleDelete(routeItem: Route) {
-  const title = pickI18n(routeItem.title as any) || '该路线'
-  try {
-    await ElMessageBox.confirm(
-      `确定删除路线「${title}」?该操作不可恢复。`,
-      '删除确认',
-      { type: 'warning' }
-    )
-    await routesApi.deleteRoute(routeItem.id)
-    ElMessage.success(`已删除路线「${title}」`)
-    fetchList()
-  } catch (err: any) {
-    if (err?.response) ElMessage.error(err.response.data?.message || '删除失败')
-  }
 }
 
 async function handleToggleStatus(routeItem: Route) {
@@ -96,12 +70,6 @@ async function handleToggleStatus(routeItem: Route) {
     ElMessage.error(err?.response?.data?.message || '状态更新失败')
   }
 }
-
-// ─── 城市选项（从列表中提取） ────────────
-const cityOptions = computed(() => {
-  const cities = new Set(list.value.map((r) => r.cityName).filter(Boolean))
-  return Array.from(cities).sort()
-})
 </script>
 
 <template>
@@ -111,49 +79,40 @@ const cityOptions = computed(() => {
       <el-button type="primary" :icon="Plus" @click="handleCreate">新增路线</el-button>
     </div>
 
-    <!-- 搜索筛选栏 -->
-    <div class="toolbar">
-      <div class="toolbar-left">
-        <el-input
-          v-model="pageParams.keyword"
-          placeholder="搜索标题/Slug..."
-          :prefix-icon="Search"
-          clearable
-          style="width: 220px"
-          @keyup.enter="handleSearch"
-          @clear="handleSearch"
+    <ListToolbar
+      v-model="filters.keyword"
+      search-placeholder="搜索标题/Slug..."
+      @search="handleSearch"
+      @reset="handleReset"
+    >
+      <el-select
+        v-model="filters.status"
+        placeholder="状态筛选"
+        clearable
+        style="width: 120px"
+        @change="handleSearch"
+      >
+        <el-option label="全部" value="" />
+        <el-option label="草稿" value="draft" />
+        <el-option label="已发布" value="published" />
+        <el-option label="已下架" value="archived" />
+      </el-select>
+      <el-select
+        v-model="filters.cityName"
+        placeholder="城市筛选"
+        clearable
+        style="width: 140px"
+        @change="handleSearch"
+      >
+        <el-option
+          v-for="city in cityOptions"
+          :key="city"
+          :label="city"
+          :value="city"
         />
-        <el-select
-          v-model="pageParams.status"
-          placeholder="状态筛选"
-          clearable
-          style="width: 120px"
-          @change="handleSearch"
-        >
-          <el-option label="全部" value="" />
-          <el-option label="草稿" value="draft" />
-          <el-option label="已发布" value="published" />
-          <el-option label="已下架" value="archived" />
-        </el-select>
-        <el-select
-          v-model="pageParams.cityName"
-          placeholder="城市筛选"
-          clearable
-          style="width: 140px"
-          @change="handleSearch"
-        >
-          <el-option
-            v-for="city in cityOptions"
-            :key="city"
-            :label="city"
-            :value="city"
-          />
-        </el-select>
-        <el-button type="primary" @click="handleSearch">搜索</el-button>
-      </div>
-    </div>
+      </el-select>
+    </ListToolbar>
 
-    <!-- 列表表格 -->
     <el-card shadow="never" class="table-card">
       <el-table
         v-loading="loading"
@@ -165,10 +124,10 @@ const cityOptions = computed(() => {
         <el-table-column label="封面" width="80">
           <template #default="{ row }">
             <el-image
-              :src="row.coverImage"
+              :src="resolveMediaUrl(row.coverImage)"
               fit="cover"
-              style="width: 50px; height: 50px; border-radius: 4px"
-              :preview-src-list="[row.coverImage]"
+              class="admin-list-thumb"
+              :preview-src-list="resolveMediaUrl(row.coverImage) ? [resolveMediaUrl(row.coverImage)] : []"
               preview-teleported
             />
           </template>
@@ -248,22 +207,29 @@ const cityOptions = computed(() => {
             >
               {{ row.published ? '下架' : '发布' }}
             </el-button>
-            <el-button type="danger" link :icon="Delete" size="small" @click="handleDelete(row)">
+            <el-button
+              type="danger"
+              link
+              :icon="Delete"
+              size="small"
+              @click="handleDelete(row.id, pickI18n(row.title as any))"
+            >
               删除
             </el-button>
           </template>
         </el-table-column>
       </el-table>
 
-      <!-- 分页 -->
       <div class="pagination-wrap">
         <el-pagination
-          v-model:current-page="pageParams.page"
-          v-model:page-size="pageParams.pageSize"
+          v-model:current-page="page"
+          v-model:page-size="pageSize"
           :total="total"
           :page-sizes="[10, 20, 50]"
           layout="total, sizes, prev, pager, next"
           background
+          @current-change="handlePageChange"
+          @size-change="handleSizeChange"
         />
       </div>
     </el-card>
@@ -282,12 +248,6 @@ const cityOptions = computed(() => {
 
 .route-title-en {
   font-size: 12px;
-  color: #909399;
-}
-
-.pagination-wrap {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 16px;
+  color: var(--lt-text-secondary);
 }
 </style>

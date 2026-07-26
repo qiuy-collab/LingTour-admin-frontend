@@ -1,77 +1,139 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
+import { ElMessage } from 'element-plus'
+import { Refresh, Search } from '@element-plus/icons-vue'
 import { auditApi } from '@/api/audit'
-import { AUDIT_ACTION_LABELS, AUDIT_RESOURCE_LABELS } from '@/types/audit'
-import type { AuditLog } from '@/types/audit'
+import { AUDIT_ACTION_LABELS, AUDIT_RESOURCE_LABELS, type AuditLog, type AuditStats } from '@/types/audit'
 import { formatDateTime } from '@/utils/format'
-import { useListPage } from '@/composables/useListPage'
 import ExportButton from '@/components/ExportButton.vue'
-import PageSkeleton from '@/components/PageSkeleton.vue'
 import EmptyState from '@/components/EmptyState.vue'
+import PageSkeleton from '@/components/PageSkeleton.vue'
 import type { ExportColumn } from '@/composables/useExport'
-import { Search, Refresh } from '@element-plus/icons-vue'
+import { useListPage } from '@/composables/useListPage'
 
-const {
-  loading, list, total, page, pageSize, isFirstLoad, filters,
-  handlePageChange, handleSizeChange, handleSearch, handleReset, getAllData,
-} = useListPage<AuditLog>({
-  fetchApi: (params) => auditApi.getList(params),
-  defaultPageSize: 20,
-  defaultFilters: {
-    action: '',
-    resource: '',
-    keyword: '',
-    dateRange: [] as string[],
+// ─── 列表数据 (useListPage) ─────────────
+const listPage = useListPage<AuditLog>({
+  fetchApi: async (params: Record<string, any>) => {
+    const [startDate, endDate] = (params.dateRange as string[]) || []
+    const response = await auditApi.getList({
+      page: params.page,
+      pageSize: params.pageSize,
+      action: params.action || undefined,
+      resource: params.resource || undefined,
+      keyword: params.keyword || undefined,
+      startDate,
+      endDate,
+    }) as any
+    // Detect API unavailable flag
+    const data = response.data?.data || {}
+    if (data.unavailable) apiUnavailable.value = true
+    return response
   },
+  defaultFilters: { action: '', resource: '', keyword: '' },
+  defaultPageSize: 20,
 })
 
-function doSearch() {
-  handleSearch()
-}
+const {
+  loading, list, total, page, pageSize,
+  filters,
+  handleSearch,
+  handleReset: baseHandleReset,
+  handlePageChange, handleSizeChange,
+  isFirstLoad,
+} = listPage
 
-function doReset() {
-  handleReset()
-}
+const apiUnavailable = ref(false)
+const detailVisible = ref(false)
+const activeLog = ref<AuditLog | null>(null)
+const dateRange = ref<string[]>([])
+const stats = ref<AuditStats>({
+  total: 0,
+  last7Days: 0,
+  actionBreakdown: [],
+  resourceBreakdown: [],
+})
 
-// Expand row
-const expandedRows = ref<string[]>([])
+const topActions = computed(() => stats.value.actionBreakdown.slice(0, 4))
+const topResources = computed(() => stats.value.resourceBreakdown.slice(0, 4))
 
-function handleExpandChange(_row: AuditLog, expanded: boolean[]) {
-  expandedRows.value = expanded.map((r: any) => r.id)
-}
+const exportColumns: ExportColumn[] = [
+  { header: '时间', key: 'createdAt', width: 20 },
+  { header: '操作人', key: 'userName', width: 14 },
+  { header: '动作', accessor: (row) => AUDIT_ACTION_LABELS[row.action] || row.action, width: 12 },
+  { header: '资源类型', accessor: (row) => AUDIT_RESOURCE_LABELS[row.resource] || row.resource, width: 14 },
+  { header: '资源名称', key: 'resourceName', width: 24 },
+  { header: 'IP', key: 'ip', width: 18 },
+]
 
-// Action tag type
 function getActionTagType(action: string) {
   const map: Record<string, string> = {
-    create: 'success',
-    update: 'primary',
-    delete: 'danger',
-    publish: 'success',
-    unpublish: 'warning',
-    login: 'info',
-    logout: 'info',
-    batch_delete: 'danger',
-    status_change: 'warning',
-    export: '',
+    create: 'success', update: 'primary', delete: 'danger',
+    publish: 'success', unpublish: 'warning', login: 'info',
+    logout: 'info', batch_delete: 'danger', status_change: 'warning', export: '',
   }
   return map[action] || 'info'
 }
 
-// Export columns
-const exportColumns: ExportColumn[] = [
-  { header: '时间', key: 'createdAt', width: 20 },
-  { header: '操作人', key: 'userName', width: 12 },
-  { header: '操作', accessor: (row) => AUDIT_ACTION_LABELS[row.action] || row.action, width: 10 },
-  { header: '资源类型', accessor: (row) => AUDIT_RESOURCE_LABELS[row.resource] || row.resource, width: 12 },
-  { header: '资源名称', key: 'resourceName', width: 20 },
-  { header: 'IP', key: 'ip', width: 16 },
-]
+async function fetchStats() {
+  const response = await auditApi.getStats()
+  const data = response.data?.data || {}
+  apiUnavailable.value = apiUnavailable.value || Boolean(data.unavailable)
+  stats.value = {
+    total: Number(data.total || 0),
+    last7Days: Number(data.last7Days || 0),
+    actionBreakdown: Array.isArray(data.actionBreakdown) ? data.actionBreakdown : [],
+    resourceBreakdown: Array.isArray(data.resourceBreakdown) ? data.resourceBreakdown : [],
+  }
+}
+
+function onDateRangeChange(val: string[] | null) {
+  filters.dateRange = val ?? []
+  handleSearch()
+}
+
+function handleReset() {
+  dateRange.value = []
+  filters.dateRange = []
+  baseHandleReset()
+}
+
+async function openDetail(row: AuditLog) {
+  activeLog.value = row
+  detailVisible.value = true
+  if (row.details) return
+  try {
+    const response = await auditApi.getDetail(row.id)
+    const data = response.data?.data
+    if (data) activeLog.value = { ...row, ...data }
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.message || '加载日志详情失败')
+  }
+}
+
+async function getAllData() {
+  const [startDate, endDate] = (filters.dateRange as string[]) || []
+  const response = await auditApi.getList({
+    page: 1, pageSize: 9999,
+    action: filters.action || undefined,
+    resource: filters.resource || undefined,
+    keyword: filters.keyword || undefined,
+    startDate, endDate,
+  })
+  return response.data?.data?.data || []
+}
+
+onMounted(() => {
+  fetchStats()
+})
 </script>
 
 <template>
   <div class="page-container">
     <div class="page-header">
-      <h2>操作日志</h2>
+      <div>
+        <h2>操作日志</h2>
+        <p class="page-desc">查看后台关键操作，支持筛选、导出和详情核对。</p>
+      </div>
       <ExportButton
         filename="操作日志"
         :columns="exportColumns"
@@ -80,94 +142,98 @@ const exportColumns: ExportColumn[] = [
       />
     </div>
 
-    <!-- Filters -->
+    <el-alert
+      v-if="apiUnavailable"
+      title="当前后端未开放完整操作日志接口，页面已降级为空数据视图，但不会再报错。"
+      type="warning"
+      show-icon
+      :closable="false"
+      class="warning-banner"
+    />
+
+    <div class="stats-grid">
+      <el-card shadow="never" class="stat-card">
+        <span class="stat-label">总操作数</span>
+        <strong>{{ stats.total }}</strong>
+      </el-card>
+      <el-card shadow="never" class="stat-card">
+        <span class="stat-label">近 7 天</span>
+        <strong>{{ stats.last7Days }}</strong>
+      </el-card>
+      <el-card shadow="never" class="stat-card">
+        <span class="stat-label">高频动作</span>
+        <strong>{{ topActions[0]?.count || 0 }}</strong>
+        <small>{{ topActions[0] ? AUDIT_ACTION_LABELS[topActions[0].action] || topActions[0].action : '暂无' }}</small>
+      </el-card>
+      <el-card shadow="never" class="stat-card">
+        <span class="stat-label">高频资源</span>
+        <strong>{{ topResources[0]?.count || 0 }}</strong>
+        <small>{{ topResources[0] ? AUDIT_RESOURCE_LABELS[topResources[0].resource] || topResources[0].resource : '暂无' }}</small>
+      </el-card>
+    </div>
+
     <div class="search-bar">
       <el-input
         v-model="filters.keyword"
-        placeholder="搜索操作人/资源名称"
+        placeholder="搜索操作人或资源名称"
         clearable
-        style="width: 200px"
-        @keyup.enter="doSearch"
+        style="width: 220px"
+        @keyup.enter="handleSearch"
       />
-      <el-select v-model="filters.action" placeholder="操作类型" clearable style="width: 130px">
-        <el-option
-          v-for="(label, key) in AUDIT_ACTION_LABELS"
-          :key="key"
-          :label="label"
-          :value="key"
-        />
+      <el-select v-model="filters.action" placeholder="动作类型" clearable style="width: 140px">
+        <el-option v-for="(label, key) in AUDIT_ACTION_LABELS" :key="key" :label="label" :value="key" />
       </el-select>
-      <el-select v-model="filters.resource" placeholder="资源类型" clearable style="width: 130px">
-        <el-option
-          v-for="(label, key) in AUDIT_RESOURCE_LABELS"
-          :key="key"
-          :label="label"
-          :value="key"
-        />
+      <el-select v-model="filters.resource" placeholder="资源类型" clearable style="width: 140px">
+        <el-option v-for="(label, key) in AUDIT_RESOURCE_LABELS" :key="key" :label="label" :value="key" />
       </el-select>
       <el-date-picker
-        v-model="filters.dateRange"
+        v-model="dateRange"
         type="daterange"
         range-separator="至"
         start-placeholder="开始日期"
         end-placeholder="结束日期"
         value-format="YYYY-MM-DD"
-        style="width: 240px"
+        style="width: 260px"
+        @change="onDateRangeChange"
       />
-      <el-button type="primary" :icon="Search" @click="doSearch">搜索</el-button>
-      <el-button :icon="Refresh" @click="doReset">重置</el-button>
+      <el-button type="primary" :icon="Search" @click="handleSearch">搜索</el-button>
+      <el-button :icon="Refresh" @click="handleReset">重置</el-button>
     </div>
 
-    <!-- Skeleton -->
     <PageSkeleton v-if="isFirstLoad && loading" type="list" :rows="8" />
 
-    <!-- Table -->
-    <el-table
-      v-else
-      :data="list"
-      v-loading="loading"
-      stripe
-      row-key="id"
-      @expand-change="handleExpandChange"
-    >
-      <el-table-column type="expand">
-        <template #default="{ row }">
-          <div class="expand-detail" v-if="row.details">
-            <pre class="detail-json">{{ JSON.stringify(row.details, null, 2) }}</pre>
-          </div>
-          <div v-else class="expand-detail">
-            <span style="color: #909399;">无详细信息</span>
-          </div>
-        </template>
-      </el-table-column>
-      <el-table-column label="时间" width="170">
+    <el-table v-else :data="list" v-loading="loading" stripe>
+      <el-table-column label="时间" width="180">
         <template #default="{ row }">{{ formatDateTime(row.createdAt) }}</template>
       </el-table-column>
-      <el-table-column label="操作人" prop="userName" width="100" />
-      <el-table-column label="操作" width="100">
+      <el-table-column label="操作人" prop="userName" width="120" />
+      <el-table-column label="动作" width="120">
         <template #default="{ row }">
           <el-tag :type="getActionTagType(row.action)" size="small">
             {{ AUDIT_ACTION_LABELS[row.action] || row.action }}
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="资源类型" width="100">
+      <el-table-column label="资源类型" width="120">
         <template #default="{ row }">
           {{ AUDIT_RESOURCE_LABELS[row.resource] || row.resource }}
         </template>
       </el-table-column>
-      <el-table-column label="资源名称" prop="resourceName" min-width="160" show-overflow-tooltip />
-      <el-table-column label="IP" prop="ip" width="130" />
+      <el-table-column label="资源名称" prop="resourceName" min-width="180" show-overflow-tooltip />
+      <el-table-column label="IP" prop="ip" width="150" />
+      <el-table-column label="详情" width="120">
+        <template #default="{ row }">
+          <el-button text type="primary" @click="openDetail(row)">查看详情</el-button>
+        </template>
+      </el-table-column>
     </el-table>
 
-    <!-- Empty state -->
     <EmptyState
       v-if="!loading && !isFirstLoad && list.length === 0"
       title="暂无操作日志"
-      description="系统操作记录将在此显示"
+      :description="apiUnavailable ? '后端暂未提供操作日志接口。' : '当前筛选条件下没有操作记录。'"
     />
 
-    <!-- Pagination -->
     <div class="pagination-wrap" v-if="total > pageSize">
       <el-pagination
         v-model:current-page="page"
@@ -179,24 +245,136 @@ const exportColumns: ExportColumn[] = [
         @size-change="handleSizeChange"
       />
     </div>
+
+    <el-drawer v-model="detailVisible" title="操作详情" size="560px">
+      <div v-if="activeLog" class="detail-stack">
+        <div class="detail-row"><span>操作人</span><strong>{{ activeLog.userName || '-' }}</strong></div>
+        <div class="detail-row"><span>动作</span><strong>{{ AUDIT_ACTION_LABELS[activeLog.action] || activeLog.action }}</strong></div>
+        <div class="detail-row"><span>资源类型</span><strong>{{ AUDIT_RESOURCE_LABELS[activeLog.resource] || activeLog.resource }}</strong></div>
+        <div class="detail-row"><span>资源名称</span><strong>{{ activeLog.resourceName || '-' }}</strong></div>
+        <div class="detail-row"><span>IP</span><strong>{{ activeLog.ip || '-' }}</strong></div>
+        <div class="detail-row"><span>时间</span><strong>{{ formatDateTime(activeLog.createdAt) }}</strong></div>
+        <div class="detail-json-wrap">
+          <div class="detail-json-title">差异详情</div>
+          <pre class="detail-json">{{ JSON.stringify(activeLog.details || {}, null, 2) }}</pre>
+        </div>
+      </div>
+      <EmptyState v-else title="暂无详情" description="当前日志没有可展示的详情数据。" />
+    </el-drawer>
   </div>
 </template>
 
 <style scoped>
-.page-container { padding: 4px 0; }
-.page-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
-.page-header h2 { margin: 0; font-size: var(--admin-font-page-title, 20px); }
-.search-bar { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 16px; align-items: center; }
-.pagination-wrap { margin-top: 16px; display: flex; justify-content: flex-end; }
-.expand-detail { padding: 12px 20px; }
+.page-container {
+  padding: 4px 0 24px;
+}
+
+.page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.page-header h2 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.page-desc {
+  margin: 6px 0 0;
+  color: var(--lt-text-secondary);
+  font-size: 13px;
+}
+
+.warning-banner {
+  margin-bottom: 16px;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.stat-card :deep(.el-card__body) {
+  display: grid;
+  gap: 8px;
+}
+
+.stat-label {
+  color: var(--lt-text-secondary);
+  font-size: 12px;
+}
+
+.stat-card strong {
+  font-size: 24px;
+  line-height: 1;
+  color: var(--lt-text-primary);
+}
+
+.stat-card small {
+  color: var(--lt-text-regular);
+}
+
+.search-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 16px;
+  align-items: center;
+}
+
+.pagination-wrap {
+  margin-top: 16px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.detail-stack {
+  display: grid;
+  gap: 12px;
+}
+
+.detail-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.detail-json-wrap {
+  margin-top: 8px;
+}
+
+.detail-json-title {
+  margin-bottom: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--lt-text-primary);
+}
+
 .detail-json {
-  background: #f5f7fa;
+  margin: 0;
   padding: 12px;
-  border-radius: 4px;
+  max-height: 360px;
+  overflow: auto;
+  border-radius: var(--lt-radius-md);
+  background: var(--lt-bg-hover);
   font-size: 12px;
   line-height: 1.5;
-  overflow-x: auto;
-  max-height: 300px;
-  margin: 0;
+}
+
+@media (max-width: 1100px) {
+  .stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 680px) {
+  .stats-grid {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

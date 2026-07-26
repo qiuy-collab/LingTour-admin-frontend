@@ -1,10 +1,13 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { eventsApi } from '@/api/events'
 import type { Event, EventStatus } from '@/types/event'
 import { EventStatusMap, EventStatusColorMap } from '@/types/event'
+import { useListPage } from '@/composables/useListPage'
+import { ListToolbar } from '@/components/list'
+import { resolveMediaUrl } from '@/utils/media'
 
 const router = useRouter()
 
@@ -12,50 +15,19 @@ const router = useRouter()
 type ViewMode = 'list' | 'calendar'
 const viewMode = ref<ViewMode>('list')
 
-// ─── 列表数据 ──────────────────────────────
-const loading = ref(false)
-const list = ref<Event[]>([])
-const total = ref(0)
-const page = ref(1)
-const pageSize = ref(10)
-const statusFilter = ref('')
-const cityFilter = ref('')
-const startDateFilter = ref('')
-const endDateFilter = ref('')
-
-async function fetchList() {
-  loading.value = true
-  try {
-    const res = await eventsApi.getEvents({
-      page: page.value,
-      pageSize: pageSize.value,
-      status: statusFilter.value,
-      city: cityFilter.value,
-      startDate: startDateFilter.value,
-      endDate: endDateFilter.value,
-    })
-    list.value = res.data.data.items
-    total.value = res.data.data.total
-  } finally {
-    loading.value = false
-  }
-}
-
-function handleSearch() {
-  page.value = 1
-  fetchList()
-}
-
-function handlePageChange(p: number) {
-  page.value = p
-  fetchList()
-}
-
-function handleSizeChange(s: number) {
-  pageSize.value = s
-  page.value = 1
-  fetchList()
-}
+// ─── 列表数据 (useListPage) ───────────────
+const {
+  loading, list, total, page, pageSize,
+  filters,
+  handlePageChange, handleSizeChange,
+  handleSearch, handleReset,
+  handleDelete,
+  fetchList,
+} = useListPage<Event>({
+  fetchApi: (params) => eventsApi.getEvents(params as any),
+  deleteApi: (id) => eventsApi.deleteEvent(id),
+  defaultFilters: { keyword: '', status: '', city: '', startDate: '', endDate: '' },
+})
 
 // ─── 操作 ──────────────────────────────
 function handleCreate() {
@@ -64,16 +36,6 @@ function handleCreate() {
 
 function handleEdit(id: string) {
   router.push(`/admin/events/${id}/edit`)
-}
-
-async function handleDelete(event: Event) {
-  try {
-    await eventsApi.deleteEvent(event.id)
-    ElMessage.success(`活动「${event.title}」已删除`)
-    fetchList()
-  } catch {
-    ElMessage.error('删除失败')
-  }
 }
 
 async function handleStatusChange(event: Event, status: EventStatus) {
@@ -153,10 +115,6 @@ const cityOptions = computed(() => {
   const cities = new Set(list.value.map((e) => e.city))
   return Array.from(cities).sort()
 })
-
-onMounted(() => {
-  fetchList()
-})
 </script>
 
 <template>
@@ -177,9 +135,14 @@ onMounted(() => {
     </div>
 
     <!-- 筛选栏 -->
-    <div class="search-bar">
+    <ListToolbar
+      v-model="filters.keyword"
+      search-placeholder="搜索活动..."
+      @search="handleSearch"
+      @reset="handleReset"
+    >
       <el-select
-        v-model="statusFilter"
+        v-model="filters.status"
         placeholder="状态筛选"
         clearable
         style="width: 140px"
@@ -192,7 +155,7 @@ onMounted(() => {
         <el-option label="草稿" value="draft" />
       </el-select>
       <el-select
-        v-model="cityFilter"
+        v-model="filters.city"
         placeholder="城市筛选"
         clearable
         style="width: 140px"
@@ -207,7 +170,7 @@ onMounted(() => {
         />
       </el-select>
       <el-date-picker
-        v-model="startDateFilter"
+        v-model="filters.startDate"
         type="date"
         placeholder="开始日期"
         value-format="YYYY-MM-DD"
@@ -215,15 +178,14 @@ onMounted(() => {
         @change="handleSearch"
       />
       <el-date-picker
-        v-model="endDateFilter"
+        v-model="filters.endDate"
         type="date"
         placeholder="结束日期"
         value-format="YYYY-MM-DD"
         style="width: 160px"
         @change="handleSearch"
       />
-      <el-button type="primary" @click="handleSearch">搜索</el-button>
-    </div>
+    </ListToolbar>
 
     <!-- ============================================ -->
     <!-- 列表视图 -->
@@ -234,18 +196,18 @@ onMounted(() => {
           <template #default="{ row }">
             <el-image
               v-if="row.image"
-              :src="row.image"
-              style="width: 60px; height: 40px; border-radius: 4px"
+              :src="resolveMediaUrl(row.image)"
+              class="admin-list-thumb admin-list-thumb--wide"
               fit="cover"
               preview-teleported
             />
-            <span v-else style="color: #c0c4cc">无图</span>
+            <span v-else class="admin-list-empty">无图</span>
           </template>
         </el-table-column>
         <el-table-column prop="title" label="活动名称" min-width="180">
           <template #default="{ row }">
             <div>{{ row.title || '' }}</div>
-            <div style="font-size: 12px; color: #909399">{{ row.titleEn || '' }}</div>
+            <div class="admin-list-meta">{{ row.titleEn || '' }}</div>
           </template>
         </el-table-column>
         <el-table-column label="日期" width="200" align="center">
@@ -282,7 +244,7 @@ onMounted(() => {
         <el-table-column label="关联路线" width="120" align="center">
           <template #default="{ row }">
             <span v-if="row.relatedRouteSlugs.length">{{ row.relatedRouteSlugs.length }}条</span>
-            <span v-else style="color: #c0c4cc">—</span>
+            <span v-else class="admin-list-empty">—</span>
           </template>
         </el-table-column>
         <el-table-column label="操作" width="240" fixed="right">
@@ -308,7 +270,7 @@ onMounted(() => {
                 撤回草稿
               </el-button>
             </template>
-            <el-popconfirm title="确定删除该活动？" @confirm="handleDelete(row)">
+            <el-popconfirm title="确定删除该活动？" @confirm="handleDelete(row.id, row.title)">
               <template #reference>
                 <el-button type="danger" link size="small">删除</el-button>
               </template>
@@ -403,27 +365,27 @@ onMounted(() => {
 }
 .calendar-event-count {
   margin-left: 16px;
-  color: var(--lt-text-secondary, #909399);
+  color: var(--lt-text-secondary);
   font-size: 14px;
 }
 
 .calendar-grid {
-  border: 1px solid #ebeef5;
-  border-radius: 4px;
+  border: 1px solid var(--lt-border-light);
+  border-radius: var(--lt-radius-md);
   overflow: hidden;
 }
 .calendar-header {
   display: grid;
   grid-template-columns: repeat(7, 1fr);
-  background: #f5f7fa;
+  background: var(--lt-bg-hover);
 }
 .calendar-header-cell {
   text-align: center;
   padding: 8px 0;
   font-weight: 600;
   font-size: 13px;
-  color: var(--lt-text-regular, #606266);
-  border-bottom: 1px solid #ebeef5;
+  color: var(--lt-text-regular);
+  border-bottom: 1px solid var(--lt-border-light);
 }
 .calendar-body {
   display: grid;
@@ -431,21 +393,21 @@ onMounted(() => {
 }
 .calendar-cell {
   min-height: 90px;
-  border-right: 1px solid #ebeef5;
-  border-bottom: 1px solid #ebeef5;
+  border-right: 1px solid var(--lt-border-light);
+  border-bottom: 1px solid var(--lt-border-light);
   padding: 4px;
   position: relative;
 }
 .calendar-cell:nth-child(7n) { border-right: none; }
-.calendar-cell-empty { background: #fafbfc; }
-.calendar-cell.is-today { background: #ecf5ff; }
+.calendar-cell-empty { background: var(--lt-bg-hover); }
+.calendar-cell.is-today { background: var(--lt-primary-soft); }
 .calendar-cell.is-today .calendar-day-num {
-  color: #409eff;
+  color: var(--lt-primary);
   font-weight: 700;
 }
 .calendar-day-num {
   font-size: 13px;
-  color: var(--lt-text-regular, #606266);
+  color: var(--lt-text-regular);
   margin-bottom: 4px;
   text-align: right;
   padding-right: 4px;

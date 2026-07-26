@@ -1,52 +1,34 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
 import { collectionsApi } from '@/api/collections'
 import type { StoreCollection } from '@/types/collection'
 import { pickI18n } from '@/types/common'
+import { useListPage } from '@/composables/useListPage'
+import { ListToolbar } from '@/components/list'
+import { resolveMediaUrl } from '@/utils/media'
 
 const router = useRouter()
-const loading = ref(false)
-const list = ref<StoreCollection[]>([])
-const total = ref(0)
-const page = ref(1)
-const pageSize = ref(10)
-const keyword = ref('')
 
-async function fetchList() {
-  loading.value = true
-  try {
-    const res = await collectionsApi.getCollections({
-      page: page.value,
-      pageSize: pageSize.value,
-      keyword: keyword.value,
-    } as any)
-    list.value = res.data.data.items
-    total.value = res.data.data.total
-  } catch (err: any) {
-    ElMessage.error(err?.response?.data?.message || '加载系列列表失败')
-  } finally {
-    loading.value = false
-  }
+// ─── 列表数据 (useListPage) ─────────────
+const {
+  loading, list, total, page, pageSize,
+  filters,
+  handlePageChange, handleSizeChange,
+  handleSearch, handleReset,
+  handleDelete,
+} = useListPage<StoreCollection>({
+  fetchApi: (params) => collectionsApi.getCollections(params as any),
+  deleteApi: (id) => collectionsApi.deleteCollection(id),
+  defaultFilters: { keyword: '' },
+})
+
+// ─── 自定义删除（带 i18n 名称） ──────────
+function handleDeleteCollection(row: StoreCollection) {
+  const title = pickI18n(row.title as any) || '该系列'
+  handleDelete(row.id, title)
 }
 
-function handleSearch() {
-  page.value = 1
-  fetchList()
-}
-
-function handlePageChange(p: number) {
-  page.value = p
-  fetchList()
-}
-
-function handleSizeChange(s: number) {
-  pageSize.value = s
-  page.value = 1
-  fetchList()
-}
-
+// ─── 操作 ──────────────────────────────
 function handleCreate() {
   router.push('/admin/shop/collections/create')
 }
@@ -54,26 +36,6 @@ function handleCreate() {
 function handleEdit(id: string) {
   router.push(`/admin/shop/collections/${id}/edit`)
 }
-
-async function handleDelete(row: StoreCollection) {
-  const title = pickI18n(row.title as any) || '该系列'
-  try {
-    await ElMessageBox.confirm(
-      `确定删除系列「${title}」?该操作不可恢复。`,
-      '删除确认',
-      { type: 'warning' }
-    )
-    await collectionsApi.deleteCollection(row.id)
-    ElMessage.success(`系列「${title}」已删除`)
-    fetchList()
-  } catch (err: any) {
-    if (err?.response) ElMessage.error(err.response.data?.message || '删除失败')
-  }
-}
-
-onMounted(() => {
-  fetchList()
-})
 </script>
 
 <template>
@@ -83,17 +45,12 @@ onMounted(() => {
       <el-button type="primary" @click="handleCreate">新增系列</el-button>
     </div>
 
-    <div class="search-bar">
-      <el-input
-        v-model="keyword"
-        placeholder="搜索系列名称 / slug"
-        clearable
-        style="width: 260px"
-        @keyup.enter="handleSearch"
-        @clear="handleSearch"
-      />
-      <el-button type="primary" @click="handleSearch">搜索</el-button>
-    </div>
+    <ListToolbar
+      v-model="filters.keyword"
+      search-placeholder="搜索系列名称 / slug"
+      @search="handleSearch"
+      @reset="handleReset"
+    />
 
     <el-card shadow="never" class="table-card">
       <el-table :data="list" v-loading="loading" stripe>
@@ -101,8 +58,8 @@ onMounted(() => {
           <template #default="{ row }">
             <el-image
               v-if="row.image"
-              :src="row.image"
-              style="width: 50px; height: 50px; border-radius: 4px"
+              :src="resolveMediaUrl(row.image)"
+              class="admin-list-thumb"
               fit="cover"
             />
           </template>
@@ -110,7 +67,7 @@ onMounted(() => {
         <el-table-column label="系列名称" min-width="180">
           <template #default="{ row }">
             <div>{{ pickI18n(row.title) }}</div>
-            <div style="font-size: 12px; color: #909399">{{ pickI18n(row.title, 'en') }}</div>
+            <div class="admin-list-meta">{{ pickI18n(row.title, 'en') }}</div>
           </template>
         </el-table-column>
         <el-table-column label="关联路线" width="160">
@@ -133,7 +90,7 @@ onMounted(() => {
         <el-table-column label="操作" width="200" fixed="right">
           <template #default="{ row }">
             <el-button type="primary" link size="small" @click="handleEdit(row.id)">编辑</el-button>
-            <el-button type="danger" link size="small" @click="handleDelete(row)">删除</el-button>
+            <el-button type="danger" link size="small" @click="handleDeleteCollection(row)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
