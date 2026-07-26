@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 import { useAuthStore } from '@/store/auth'
+import { ElMessage } from 'element-plus'
 
 // Layout
 import AdminLayout from '@/layout/AdminLayout.vue'
@@ -20,7 +21,7 @@ const routes: RouteRecordRaw[] = [
         path: 'dashboard',
         name: 'Dashboard',
         component: () => import('@/views/dashboard/Dashboard.vue'),
-        meta: { title: '仪表盘' },
+        meta: { title: '运营概览' },
       },
       // 城市管理
       {
@@ -207,6 +208,12 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/community/PostDetail.vue'),
         meta: { title: '帖子详情' },
       },
+      {
+        path: 'community-briefs',
+        name: 'CommunityBriefs',
+        component: () => import('@/views/community/CommunityBriefs.vue'),
+        meta: { title: '发帖引导' },
+      },
       // 首页配置
       {
         path: 'home',
@@ -248,6 +255,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '系统设置', roles: ['admin'] },
       },
       // 操作日志
+      {
+        path: 'system/staff',
+        name: 'StaffAccounts',
+        component: () => import('@/views/system/StaffAccounts.vue'),
+        meta: { title: '管理员账号', roles: ['admin'] },
+      },
       {
         path: 'system/audit-logs',
         name: 'AuditLogs',
@@ -309,6 +322,7 @@ router.beforeEach((to, _from, next) => {
     // 角色受限路由必须有合法用户对象,否则拒绝并强制重新登录
     const role = authStore.currentUser?.role
     if (!role || !requiredRoles.includes(role)) {
+      ElMessage.warning('权限不足')
       next('/login')
       return
     }
