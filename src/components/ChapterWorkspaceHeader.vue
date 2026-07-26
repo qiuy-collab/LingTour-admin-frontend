@@ -48,13 +48,15 @@ function selectTab(key: string) {
       </div>
     </div>
 
-    <div class="workspace-tabs" role="tablist" aria-label="章节导航">
+    <div class="workspace-tabs" role="tablist" aria-label="内容分区">
       <button
         v-for="tab in tabs"
         :key="tab.key"
         type="button"
         class="workspace-tab"
         :class="{ active: modelValue === tab.key }"
+        role="tab"
+        :aria-selected="modelValue === tab.key"
         @click="selectTab(tab.key)"
       >
         <span class="workspace-tab__label">{{ tab.label }}</span>
@@ -75,12 +77,7 @@ function selectTab(key: string) {
   align-items: flex-start;
   justify-content: space-between;
   gap: 18px;
-  padding: 18px 20px;
-  border-radius: 18px;
-  background:
-    radial-gradient(circle at top left, rgba(64, 158, 255, 0.16), transparent 34%),
-    linear-gradient(135deg, #f7fbff 0%, #ffffff 65%);
-  border: 1px solid #d9ecff;
+  padding: 0;
 }
 
 .workspace-copy {
@@ -93,7 +90,7 @@ function selectTab(key: string) {
   font-weight: 700;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: #409eff;
+  color: var(--lt-primary);
 }
 
 .workspace-title-row {
@@ -107,7 +104,7 @@ function selectTab(key: string) {
   margin: 0;
   font-size: 20px;
   line-height: 1.2;
-  color: #1f2a37;
+  color: var(--lt-text-primary);
 }
 
 .workspace-active {
@@ -115,9 +112,9 @@ function selectTab(key: string) {
   align-items: center;
   min-height: 28px;
   padding: 0 12px;
-  border-radius: 999px;
-  background: rgba(64, 158, 255, 0.12);
-  color: #1767c6;
+  border-radius: 9999px;
+  background: color-mix(in srgb, var(--lt-primary) 12%, transparent);
+  color: var(--lt-primary-dark);
   font-size: 12px;
   font-weight: 600;
 }
@@ -127,7 +124,7 @@ function selectTab(key: string) {
   max-width: 720px;
   font-size: 13px;
   line-height: 1.6;
-  color: #5b6472;
+  color: var(--lt-text-regular);
 }
 
 .workspace-actions {
@@ -142,7 +139,10 @@ function selectTab(key: string) {
 .workspace-tabs {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 4px;
+  padding: 4px;
+  border-radius: var(--lt-radius-lg);
+  background: var(--lt-bg-hover);
 }
 
 .workspace-tab {
@@ -151,10 +151,10 @@ function selectTab(key: string) {
   gap: 8px;
   min-height: 42px;
   padding: 0 16px;
-  border: 1px solid #d7deea;
-  border-radius: 14px;
-  background: #fff;
-  color: #526071;
+  border: 0;
+  border-radius: var(--lt-radius-md);
+  background: transparent;
+  color: var(--lt-text-regular);
   cursor: pointer;
   transition:
     border-color 0.2s ease,
@@ -165,16 +165,13 @@ function selectTab(key: string) {
 }
 
 .workspace-tab:hover {
-  border-color: #b9d9ff;
-  box-shadow: 0 8px 20px rgba(31, 42, 55, 0.06);
-  transform: translateY(-1px);
+  background: color-mix(in srgb, var(--lt-bg-card) 70%, transparent);
 }
 
 .workspace-tab.active {
-  border-color: #409eff;
-  background: linear-gradient(135deg, #eff7ff 0%, #f7fbff 100%);
-  color: #1767c6;
-  box-shadow: 0 10px 24px rgba(64, 158, 255, 0.14);
+  background: var(--lt-bg-card);
+  color: var(--lt-primary-dark);
+  box-shadow: var(--lt-shadow-sm);
 }
 
 .workspace-tab__label {
@@ -188,16 +185,16 @@ function selectTab(key: string) {
   align-items: center;
   min-height: 22px;
   padding: 0 8px;
-  border-radius: 999px;
-  background: rgba(31, 42, 55, 0.08);
-  color: #6b7483;
+  border-radius: 9999px;
+  background: color-mix(in srgb, var(--lt-text-primary) 8%, transparent);
+  color: var(--lt-text-secondary);
   font-size: 11px;
   font-weight: 600;
 }
 
 .workspace-tab.active .workspace-tab__badge {
-  background: rgba(64, 158, 255, 0.14);
-  color: #1767c6;
+  background: color-mix(in srgb, var(--lt-primary) 14%, transparent);
+  color: var(--lt-primary-dark);
 }
 
 @media (max-width: 1100px) {
